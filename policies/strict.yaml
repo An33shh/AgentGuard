@@ -1,0 +1,63 @@
+policy:
+  name: "strict"
+  risk_threshold: 0.60
+  review_threshold: 0.40
+
+  deny_tools:
+    - "shell.execute"
+    - "bash.run"
+    - "bash"
+    - "shell"
+    - "subprocess.run"
+    - "exec"
+    - "run_command"
+    - "terminal"
+    - "file.write"
+    - "file.delete"
+    - "git.push"
+    - "git.commit"
+    - "email.send"
+
+  deny_path_patterns:
+    - "~/.ssh/**"
+    - "~/.aws/**"
+    - "~/.env"
+    - "**/.env"
+    - "*.env"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/*.p12"
+    - "**/*.pfx"
+    - "**/id_rsa"
+    - "**/id_ed25519"
+    - "/etc/**"
+    - "**/credentials.json"
+    - "**/service_account*.json"
+    - "**/secrets/**"
+    - "**/private/**"
+
+  deny_domains:
+    - "*.ngrok.io"
+    - "*.ngrok-free.app"
+    - "*.requestbin.com"
+    - "webhook.site"
+    - "*.webhook.site"
+    - "pipedream.net"
+    - "*.pipedream.net"
+    - "hookbin.com"
+    - "beeceptor.com"
+
+  allow_tools:
+    - "file.read"
+    - "web_search"
+    - "summarize"
+    - "calculate"
+    - "translate"
+
+  review_tools:
+    - "http_get"
+    - "http_request"
+
+  session_limits:
+    max_actions: 50
+    max_blocked: 2
