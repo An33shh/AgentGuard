@@ -10,17 +10,17 @@ from fastapi import Depends
 
 from agentguard.analyzer.intent_analyzer import IntentAnalyzer
 from agentguard.interceptor.interceptor import Interceptor
+from agentguard.ledger.db import PostgresEventLedger
 from agentguard.ledger.event_ledger import EventLedger, InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
 
 
 @lru_cache
 def get_ledger() -> EventLedger:
-    """Get the global event ledger singleton.
-
-    Returns InMemoryEventLedger for Phase 1.
-    Swap the implementation here (and only here) to move to Phase 2 Postgres.
-    """
+    """Return PostgresEventLedger if DATABASE_URL is set, else InMemoryEventLedger."""
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        return PostgresEventLedger(db_url)
     return InMemoryEventLedger()
 
 

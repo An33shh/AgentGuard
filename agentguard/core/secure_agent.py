@@ -13,6 +13,7 @@ import structlog
 from agentguard.analyzer.intent_analyzer import IntentAnalyzer
 from agentguard.core.models import Decision, Event
 from agentguard.interceptor.interceptor import Interceptor
+from agentguard.ledger.db import PostgresEventLedger
 from agentguard.ledger.event_ledger import EventLedger, InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
 from agentguard.telemetry.logger import configure_logging
@@ -94,7 +95,12 @@ class SecureAgent:
 
         analyzer = IntentAnalyzer(api_key=api_key, model=model, timeout=timeout)
         policy_engine = PolicyEngine.from_yaml(policy_file)
-        event_ledger = ledger or InMemoryEventLedger()
+        if ledger is not None:
+            event_ledger = ledger
+        elif os.getenv("DATABASE_URL"):
+            event_ledger = PostgresEventLedger(os.getenv("DATABASE_URL"))
+        else:
+            event_ledger = InMemoryEventLedger()
 
         interceptor = Interceptor(
             analyzer=analyzer,
