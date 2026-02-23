@@ -91,6 +91,17 @@ export async function validatePolicy(yaml: string): Promise<{ valid: boolean; [k
   });
 }
 
+export async function getRawPolicy(): Promise<{ yaml: string; path: string }> {
+  return fetchAPI<{ yaml: string; path: string }>("/api/v1/policies/raw");
+}
+
+export async function savePolicy(yaml: string): Promise<{ saved: boolean; policy_name: string }> {
+  return fetchAPI<{ saved: boolean; policy_name: string }>("/api/v1/policies/save", {
+    method: "POST",
+    body: JSON.stringify({ yaml }),
+  });
+}
+
 export async function reloadPolicy(): Promise<{ reloaded: boolean; policy_name: string }> {
   return fetchAPI<{ reloaded: boolean; policy_name: string }>("/api/v1/policies/reload", {
     method: "POST",

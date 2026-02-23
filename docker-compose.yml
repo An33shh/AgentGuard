@@ -1,7 +1,22 @@
 version: "3.9"
 
 services:
-  # ── Redis (shared message bus) ──────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: agentguard
+      POSTGRES_PASSWORD: agentguard
+      POSTGRES_DB: agentguard
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     ports:
@@ -15,7 +30,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── AgentGuard API ───────────────────────────────────────────────────────
   agentguard-api:
     build: .
     command: uvicorn api.main:app --host 0.0.0.0 --port 8001
@@ -24,23 +38,13 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql+asyncpg://agentguard:agentguard@postgres:5432/agentguard
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
 
-  # ── Rowboat Sidecar Worker ───────────────────────────────────────────────
-  rowboat-worker:
-    build: .
-    command: python -m agentguard.integrations.rowboat_worker
-    env_file: .env
-    environment:
-      REDIS_URL: redis://redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # ── AgentGuard Dashboard ─────────────────────────────────────────────────
   dashboard:
     build:
       context: ./dashboard
@@ -53,4 +57,5 @@ services:
       - agentguard-api
 
 volumes:
+  postgres_data:
   redis_data:
