@@ -89,6 +89,56 @@ export interface PolicyConfig {
   };
 }
 
+export interface AgentProfile {
+  agent_id: string;
+  agent_goal: string;
+  is_registered: boolean;
+  framework: string;
+  first_seen: string;
+  last_seen: string;
+  total_sessions: number;
+  total_events: number;
+  blocked_events: number;
+  reviewed_events: number;
+  allowed_events: number;
+  avg_risk_score: number;
+  max_risk_score: number;
+  attack_patterns: string[];
+  tools_used: string[];
+  risk_trend: number[];
+}
+
+export interface GraphNode {
+  id: string;
+  type: "agent" | "session" | "tool" | "pattern";
+  label: string;
+  // agent
+  agent_id?: string;
+  is_registered?: boolean;
+  total_events?: number;
+  avg_risk?: number;
+  // session
+  session_id?: string;
+  timestamp?: string;
+  // tool
+  decision?: string;
+  // pattern
+  indicator?: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  type: "had_session" | "used_tool" | "exhibited_pattern";
+  decision?: string;
+  risk_score?: number;
+}
+
+export interface AgentGraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 export function getRiskLevel(score: number): RiskLevel {
   if (score < 0.3) return "low";
   if (score < 0.6) return "medium";

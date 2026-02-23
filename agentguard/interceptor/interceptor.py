@@ -10,13 +10,13 @@ from typing import Any
 
 import structlog
 
-from agentguard.core.models import Action, ActionType, Decision, Event, RiskAssessment
+from agentguard.core.models import Action, ActionType, Decision, Event, RiskAssessment, derive_agent_id
 from agentguard.interceptor.action_types import (
     infer_action_type,
     is_credential_path,
     extract_file_path,
 )
-from agentguard.integrations.rowboat import get_rowboat_client
+from agentguard.integrations.enrichment import get_enrichment_client
 from agentguard.integrations.stream import get_stream_publisher
 
 logger = structlog.get_logger(__name__)
@@ -138,6 +138,7 @@ class Interceptor:
         raw_payload: dict[str, Any],
         agent_goal: str,
         session_id: str | None = None,
+        agent_id: str | None = None,
         provenance: dict[str, Any] | None = None,
         framework: str = "unknown",
     ) -> tuple[Decision, Event]:
@@ -151,6 +152,10 @@ class Interceptor:
         session_id = session_id or str(uuid.uuid4())
         provenance = provenance or {}
         t_start = time.monotonic()
+
+        # Two-tier agent identity: explicit (registered) or derived (auto-detected)
+        is_registered = bool(agent_id)
+        resolved_agent_id = agent_id or derive_agent_id(agent_goal, framework)
 
         log = logger.bind(session_id=session_id, framework=framework)
 
@@ -185,6 +190,8 @@ class Interceptor:
             )
             event = Event(
                 session_id=session_id,
+                agent_id=resolved_agent_id,
+                agent_is_registered=is_registered,
                 agent_goal=agent_goal,
                 action=action,
                 assessment=assessment,
@@ -238,6 +245,8 @@ class Interceptor:
 
         event = Event(
             session_id=session_id,
+            agent_id=resolved_agent_id,
+            agent_is_registered=is_registered,
             agent_goal=agent_goal,
             action=action,
             assessment=assessment,
@@ -250,15 +259,15 @@ class Interceptor:
         # 6. Log to ledger
         await self._ledger.append(event)
 
-        # 7. Async Rowboat enrichment — fire-and-forget, zero latency impact
+        # 7. Async enrichment — fire-and-forget, zero latency impact
         if decision in (Decision.BLOCK, Decision.REVIEW):
             publisher = get_stream_publisher()
             if publisher.enabled:
-                # Redis Streams path: durable, survives Rowboat restarts
+                # Redis Streams path: durable, survives worker restarts
                 asyncio.create_task(self._publish_to_stream(event, publisher))
-            elif get_rowboat_client().enabled:
+            elif get_enrichment_client().enabled:
                 # Direct async fallback (no Redis): same process, task-based
-                asyncio.create_task(self._enrich_with_rowboat(event))
+                asyncio.create_task(self._enrich_direct(event))
 
         # 8. Update session counters
         async with self._stats_lock:
@@ -293,11 +302,11 @@ class Interceptor:
             # Fallback to direct Rowboat call if Redis publish fails
             await self._enrich_with_rowboat(event)
 
-    async def _enrich_with_rowboat(self, event: Event) -> None:
-        """Fire-and-forget: send event to Rowboat for async multi-agent triage."""
+    async def _enrich_direct(self, event: Event) -> None:
+        """Fire-and-forget: enrich event directly via Claude (no Redis)."""
         from agentguard.integrations.insights import get_insights_store
 
-        rowboat = get_rowboat_client()
+        client = get_enrichment_client()
         store = get_insights_store()
         payload = {
             "event_id": event.event_id,
@@ -309,13 +318,13 @@ class Interceptor:
             "agent_goal": event.agent_goal,
         }
         try:
-            insight = await rowboat.triage_event(payload)
+            insight = await client.triage_event(payload)
             store.put(insight)
             logger.info(
-                "rowboat_triage_complete",
+                "enrichment_complete",
                 event_id=event.event_id,
-                attack_pattern=insight.attack_patterns,
+                attack_patterns=insight.attack_patterns,
                 confidence=insight.confidence,
             )
         except Exception as exc:
-            logger.warning("rowboat_triage_failed", event_id=event.event_id, error=str(exc))
+            logger.warning("enrichment_failed", event_id=event.event_id, error=str(exc))

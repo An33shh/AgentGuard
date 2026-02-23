@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -25,6 +27,20 @@ class Decision(str, Enum):
     ALLOW = "allow"
     BLOCK = "block"
     REVIEW = "review"
+
+
+def derive_agent_id(agent_goal: str, framework: str = "unknown") -> str:
+    """
+    Derive a stable, human-readable agent ID from goal + framework.
+
+    Format: <goal-slug>-<6-char-hash>
+    Example: "summarize-readme-a3f9c1"
+
+    Used when no explicit agent_id is provided (unregistered agents).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", agent_goal.lower().strip())[:30].strip("-")
+    hash_suffix = hashlib.md5(f"{framework}:{agent_goal}".encode()).hexdigest()[:6]
+    return f"{slug}-{hash_suffix}"
 
 
 class Action(BaseModel):
@@ -73,6 +89,8 @@ class PolicyViolation(BaseModel):
 class Event(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
+    agent_id: str = ""            # explicit registered ID or derived slug-hash
+    agent_is_registered: bool = False   # True only when caller passes explicit agent_id
     agent_goal: str
     action: Action
     assessment: RiskAssessment
@@ -81,6 +99,32 @@ class Event(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     provenance: dict[str, Any] = Field(default_factory=dict)
     framework: str = "unknown"
+
+
+class AgentProfile(BaseModel):
+    """Aggregated profile for a single agent across all sessions."""
+    agent_id: str
+    agent_goal: str
+    is_registered: bool
+    framework: str
+    first_seen: datetime
+    last_seen: datetime
+    total_sessions: int
+    total_events: int
+    blocked_events: int
+    reviewed_events: int
+    allowed_events: int
+    avg_risk_score: float
+    max_risk_score: float
+    attack_patterns: list[str]
+    tools_used: list[str]
+    risk_trend: list[float]         # risk scores ordered by time (last 20)
+
+
+class AgentGraphData(BaseModel):
+    """Graph nodes and edges for the knowledge graph visualization."""
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
 
 
 class TimelineSummary(BaseModel):

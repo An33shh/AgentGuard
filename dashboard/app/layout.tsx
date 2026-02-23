@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/timeline", label: "Timeline" },
   { href: "/events", label: "Events" },
+  { href: "/agents", label: "Agents" },
   { href: "/policies", label: "Policies" },
 ];
 

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agentguard.telemetry.logger import configure_logging
-from api.routes import demo, events, health, insights, policies
+from api.routes import agents, demo, events, health, insights, policies
 
 
 @asynccontextmanager
@@ -53,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(events.router)
     app.include_router(policies.router)
     app.include_router(insights.router)
+    app.include_router(agents.router)
     app.include_router(demo.router)
 
     return app

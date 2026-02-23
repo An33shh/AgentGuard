@@ -1,6 +1,6 @@
 // Typed API client for AgentGuard FastAPI backend
 
-import type { Decision, Event, PolicyConfig, Stats, TimelineSummary } from "@/types";
+import type { AgentGraphData, AgentProfile, Decision, Event, PolicyConfig, Stats, TimelineSummary } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -95,6 +95,20 @@ export async function reloadPolicy(): Promise<{ reloaded: boolean; policy_name: 
   return fetchAPI<{ reloaded: boolean; policy_name: string }>("/api/v1/policies/reload", {
     method: "POST",
   });
+}
+
+// ── Agents ─────────────────────────────────────────────
+
+export async function getAgents(): Promise<{ agents: AgentProfile[]; total: number }> {
+  return fetchAPI<{ agents: AgentProfile[]; total: number }>("/api/v1/agents");
+}
+
+export async function getAgent(agentId: string): Promise<AgentProfile> {
+  return fetchAPI<AgentProfile>(`/api/v1/agents/${encodeURIComponent(agentId)}`);
+}
+
+export async function getAgentGraph(agentId: string): Promise<AgentGraphData> {
+  return fetchAPI<AgentGraphData>(`/api/v1/agents/${encodeURIComponent(agentId)}/graph`);
 }
 
 // ── Health ─────────────────────────────────────────────
