@@ -54,7 +54,7 @@ export default function PoliciesPage() {
   }, [yaml]);
 
   return (
-    <div className="space-y-4 h-full flex flex-col">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -95,14 +95,14 @@ export default function PoliciesPage() {
       )}
 
       {/* Editor */}
-      <div className="flex-1 rounded-xl overflow-hidden border border-gray-200 min-h-[520px]">
+      <div className="rounded-xl overflow-hidden border border-gray-200">
         {loading ? (
-          <div className="flex items-center justify-center h-full text-sm text-gray-400">
+          <div className="flex items-center justify-center h-[520px] text-sm text-gray-400">
             Loading policy…
           </div>
         ) : (
           <Editor
-            height="100%"
+            height="calc(100vh - 220px)"
             defaultLanguage="yaml"
             value={yaml}
             onChange={(v) => setYaml(v ?? "")}
