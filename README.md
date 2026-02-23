@@ -35,54 +35,137 @@ USER → AI AGENT → AgentGuard (Middleware) → Tools / APIs / System
 
 ---
 
-## Quick Start
+## Getting Started
+
+### 1. Install
 
 ```bash
-# Install
+git clone https://github.com/An33shh/AgentGuard.git
+cd AgentGuard
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY=sk-ant-...
-
-# Run the attack demo
-python examples/demo_attack.py
-
-# Run tests (no API key needed)
-pytest tests/ -v
-
-# Start API
-uvicorn api.main:app --reload
-
-# Start dashboard
-cd dashboard && npm install && npm run dev
 ```
 
-Or with Docker:
+### 2. Wrap your agent
+
+AgentGuard sits between your agent and the tools it calls. Pick your framework:
+
+**OpenAI Agents SDK**
+```python
+from agentguard import SecureAgent
+
+guard = SecureAgent.from_env(
+    goal="Summarize the README.md file",
+    framework="openai",
+    policy_path="policies/default.yaml",
+)
+
+hooks = guard.get_openai_hooks()
+result = await Runner.run(agent, input=msg, hooks=hooks)
+# Every tool call is intercepted. Malicious ones are blocked before execution.
+```
+
+**LangGraph**
+```python
+guard = SecureAgent.from_env(goal="...", framework="langgraph")
+secured_graph = guard.wrap_langgraph(compiled_graph)
+result = await secured_graph.ainvoke({"messages": [...]})
+```
+
+**Any framework (manual)**
+```python
+decision, event = await guard.intercept({
+    "tool_name": "file.read",
+    "parameters": {"path": "~/.aws/credentials"},
+})
+# decision → Decision.BLOCK
+# event    → full forensic record with risk score, reason, policy rule hit
+```
+
+### 3. Start the API + dashboard
 
 ```bash
-cp .env.example .env   # add your API key
+# Terminal 1 — API server (stores every intercepted event)
+uvicorn api.main:app --reload
+# → http://localhost:8001
+
+# Terminal 2 — Investigation dashboard
+cd dashboard && npm install && npm run dev
+# → http://localhost:3000
+```
+
+Or spin up everything at once with Docker:
+
+```bash
+cp .env.example .env   # add your ANTHROPIC_API_KEY
 docker-compose up
 # API → :8001  |  Dashboard → :3001
 ```
 
+### 4. Investigate in the dashboard
+
+Once your agent is running, open `http://localhost:3000` to see:
+
+- **Overview** — blocked event count, risk trends, recent alerts
+- **Timeline** — every action your agent took, color-coded by risk
+- **Events** — searchable forensic log with full decision detail per event
+- **Agent Profiles** — per-agent identity with knowledge graph of sessions, tools, and attack patterns
+- **Policies** — edit and hot-reload your YAML policy without restarting
+
+### 5. Customize your policy
+
+Edit `policies/default.yaml` to define what's allowed, blocked, or flagged for review:
+
+```yaml
+policy:
+  name: default
+  risk_threshold: 0.75       # Claude risk score above this → BLOCK
+
+  deny_tools:                # blocked regardless of risk score
+    - shell.execute
+    - bash.run
+
+  deny_path_patterns:        # file paths always blocked
+    - ~/.ssh/**
+    - ~/.aws/credentials
+    - "**/*.pem"
+
+  deny_domains:              # outbound domains always blocked
+    - "*.ngrok.io"
+    - webhook.site
+
+  review_tools:              # flagged for human review
+    - email.send
+    - git.push
+```
+
+Changes apply immediately — no restart needed:
+
+```bash
+curl -X POST http://localhost:8001/api/v1/policies/reload
+# or use the Reload button in the dashboard
+```
+
 ---
 
-## Detection Pipeline
+## How it works
 
-Every action passes through four stages in sequence:
+Every tool call passes through four stages before execution:
 
-| Stage | Description | Latency |
+| Stage | What happens | Latency |
 |-------|-------------|---------|
-| **Normalize** | Convert raw tool calls to typed `Action` objects | < 0.1ms |
-| **Policy** | Deterministic YAML rules — `deny_tools`, `deny_path_patterns`, `deny_domains` | < 1ms |
-| **Analyze** | Claude intent scoring via forced `tool_use` (structured JSON output) | 200–800ms |
-| **Log** | Forensic event stored with full provenance + Redis Streams publish | < 0.1ms |
+| **Normalize** | Raw tool call → typed `Action` object | < 0.1ms |
+| **Policy** | YAML rules checked — `deny_tools`, path patterns, domains | < 1ms |
+| **Analyze** | Claude scores intent alignment (0–1) via forced `tool_use` | 200–800ms |
+| **Log** | Decision stored with full provenance + Redis Streams publish | < 0.1ms |
 
-The policy stage runs **before** the LLM. A `~/.ssh/id_rsa` read is blocked in microseconds even if the Claude API is down.
+The policy stage runs **before** the LLM — a `~/.ssh/id_rsa` read is blocked in microseconds even if the Claude API is down.
 
 ---
 
-## OpenClaw Attack Scenarios
+## Attack scenarios (OpenClaw)
 
-All 5 real-world attack vectors from the OpenClaw incidents — 100% detection rate.
+100% detection rate on all 5 real-world attack vectors:
 
 | # | Scenario | Vector | Result |
 |---|----------|--------|--------|
@@ -93,90 +176,10 @@ All 5 real-world attack vectors from the OpenClaw incidents — 100% detection r
 | 5 | Goal hijacking | `file.read ~/.aws/credentials` | **BLOCK** `risk=0.95` |
 | 6 | Legitimate baseline | `file.read README.md` | **ALLOW** `risk=0.05` |
 
----
-
-## Usage
-
-### SecureAgent Facade
-
-```python
-from agentguard import SecureAgent
-
-guard = SecureAgent.from_env(
-    goal="Summarize the README.md file",
-    framework="openai",
-    policy_path="policies/default.yaml",
-)
-
-decision, event = await guard.intercept({
-    "tool_name": "file.read",
-    "parameters": {"path": "~/.aws/credentials"},
-})
-# → Decision.BLOCK  risk_score=0.95
-```
-
-### OpenAI Agents SDK
-
-```python
-hooks = guard.get_openai_hooks()
-result = await Runner.run(agent, input=msg, hooks=hooks)
-```
-
-### LangGraph
-
-```python
-secured_graph = guard.wrap_langgraph(compiled_graph)
-result = await secured_graph.ainvoke({"messages": [...]})
-```
-
----
-
-## Policy Configuration
-
-```yaml
-# policies/default.yaml
-policy:
-  name: default
-  risk_threshold: 0.75
-
-  deny_tools:
-    - shell.execute
-    - bash.run
-
-  deny_path_patterns:
-    - ~/.ssh/**
-    - ~/.aws/credentials
-    - "**/*.pem"
-    - "**/*.key"
-
-  deny_domains:
-    - "*.ngrok.io"
-    - "*.requestbin.com"
-    - webhook.site
-
-  review_tools:
-    - email.send
-    - file.write
-    - git.push
-```
-
-Policies hot-reload without restarting the server:
-
 ```bash
-curl -X POST http://localhost:8001/api/v1/policies/reload
+python examples/demo_attack.py   # run all 6 scenarios live
+pytest tests/ -v                 # run the full test suite (no API key needed)
 ```
-
----
-
-## Dashboard
-
-Next.js 15 investigation interface with:
-
-- **Overview** — live stat cards, risk sparkline, recent blocked feed
-- **Timeline** — session-based attack timeline with risk trend
-- **Events** — filterable event table with forensic detail view
-- **Agent Profiles** — persistent identity profiles with force-directed knowledge graphs
-- **Policies** — live YAML viewer with hot-reload
 
 ---
 
