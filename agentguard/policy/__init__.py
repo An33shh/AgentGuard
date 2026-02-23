@@ -1,0 +1,1 @@
+"""Deterministic YAML policy enforcement."""
