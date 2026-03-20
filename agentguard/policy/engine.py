@@ -143,7 +143,36 @@ class PolicyEngine:
             self._config = PolicyConfig()
             self._path = None
 
+        self._compile_patterns()
         logger.info("policy_engine_loaded", policy_name=self._config.name)
+
+    def _compile_patterns(self) -> None:
+        """Pre-compile all glob and domain patterns from the current config."""
+        self._path_patterns: list[tuple[re.Pattern[str], str]] = [
+            (re.compile(_glob_to_regex(os.path.expanduser(p).replace("\\", "/").rstrip("/"))), p)
+            for p in (self._config.deny_path_patterns or [])
+        ]
+        self._domain_patterns: list[tuple[str | None, str, str]] = []
+        for p in (self._config.deny_domains or []):
+            if p.startswith("*."):
+                self._domain_patterns.append((None, p[1:], "suffix"))
+            else:
+                self._domain_patterns.append((p, None, "exact"))
+        self._deny_tool_patterns: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(t.lower())) for t in (self._config.deny_tools or [])
+        ]
+        self._allow_tool_patterns: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(t.lower())) for t in (self._config.allow_tools or [])
+        ]
+        self._review_tool_patterns: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(t.lower())) for t in (self._config.review_tools or [])
+        ]
+        self._unregistered_tool_patterns: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(t.lower())) for t in (self._config.deny_unregistered_tools or [])
+        ]
+        self._provenance_patterns: list[re.Pattern[str]] = [
+            re.compile(fnmatch.translate(p)) for p in (self._config.deny_provenance_sources or [])
+        ]
 
     @classmethod
     def from_yaml(cls, path: str) -> "PolicyEngine":
@@ -156,6 +185,7 @@ class PolicyEngine:
             raise ValueError("No policy path to reload from")
         self._config = PolicyConfig.from_yaml(reload_path)
         self._path = reload_path
+        self._compile_patterns()
         logger.info("policy_reloaded", policy_name=self._config.name)
 
     @property
@@ -171,23 +201,20 @@ class PolicyEngine:
         """
         ra = self._config.rule_annotations or None
 
+        tool_lower = action.tool_name.lower()
+
         # Rule 1: deny_tools
-        if self._config.deny_tools:
-            for denied_tool in self._config.deny_tools:
-                if fnmatch.fnmatch(action.tool_name.lower(), denied_tool.lower()):
-                    return Decision.BLOCK, _make_violation(
-                        "deny_tools", "tool_blacklist",
-                        f"Tool '{action.tool_name}' is in deny list",
-                        Decision.BLOCK, ra,
-                    )
+        for pat in self._deny_tool_patterns:
+            if pat.match(tool_lower):
+                return Decision.BLOCK, _make_violation(
+                    "deny_tools", "tool_blacklist",
+                    f"Tool '{action.tool_name}' is in deny list",
+                    Decision.BLOCK, ra,
+                )
 
         # Rule 2: allow_tools — if configured, tool MUST be in the allowlist
-        if self._config.allow_tools:
-            in_allowlist = any(
-                fnmatch.fnmatch(action.tool_name.lower(), p.lower())
-                for p in self._config.allow_tools
-            )
-            if not in_allowlist:
+        if self._allow_tool_patterns:
+            if not any(p.match(tool_lower) for p in self._allow_tool_patterns):
                 return Decision.BLOCK, _make_violation(
                     "allow_tools", "tool_allowlist",
                     f"Tool '{action.tool_name}' is not in the allow list",
@@ -197,14 +224,16 @@ class PolicyEngine:
         # Rule 3: deny_path_patterns (applies to file operations)
         if action.type in (ActionType.FILE_READ, ActionType.FILE_WRITE, ActionType.CREDENTIAL_ACCESS):
             path = extract_file_path(action.parameters)
-            if path and self._config.deny_path_patterns:
-                for pattern in self._config.deny_path_patterns:
-                    if _path_matches(path, pattern):
-                        return Decision.BLOCK, _make_violation(
-                            "deny_path_patterns", "path_blacklist",
-                            f"Path '{path}' matches deny pattern '{pattern}'",
-                            Decision.BLOCK, ra,
-                        )
+            if path and self._path_patterns:
+                if len(path) <= _MAX_PATH_LEN:
+                    expanded = os.path.expanduser(path).replace("\\", "/").rstrip("/")
+                    for compiled, raw_pattern in self._path_patterns:
+                        if compiled.fullmatch(expanded):
+                            return Decision.BLOCK, _make_violation(
+                                "deny_path_patterns", "path_blacklist",
+                                f"Path '{path}' matches deny pattern '{raw_pattern}'",
+                                Decision.BLOCK, ra,
+                            )
 
         # Rule 4: Always block CREDENTIAL_ACCESS type (belt-and-suspenders)
         if action.type == ActionType.CREDENTIAL_ACCESS:
@@ -216,26 +245,32 @@ class PolicyEngine:
             )
 
         # Rule 5: deny_domains
-        if action.type == ActionType.HTTP_REQUEST and self._config.deny_domains:
+        if action.type == ActionType.HTTP_REQUEST and self._domain_patterns:
             domain = extract_url_domain(action.parameters)
             if domain:
-                for pattern in self._config.deny_domains:
-                    if _domain_matches(domain, pattern):
+                for exact_or_none, suffix_or_none, match_type in self._domain_patterns:
+                    if match_type == "suffix":
+                        if domain == suffix_or_none[1:] or domain.endswith(suffix_or_none):
+                            return Decision.BLOCK, _make_violation(
+                                "deny_domains", "domain_blacklist",
+                                f"Domain '{domain}' matches deny pattern '*.{suffix_or_none[1:]}'",
+                                Decision.BLOCK, ra,
+                            )
+                    elif domain == exact_or_none:
                         return Decision.BLOCK, _make_violation(
                             "deny_domains", "domain_blacklist",
-                            f"Domain '{domain}' matches deny pattern '{pattern}'",
+                            f"Domain '{domain}' matches deny pattern '{exact_or_none}'",
                             Decision.BLOCK, ra,
                         )
 
         # Rule 6: review_tools
-        if self._config.review_tools:
-            for review_tool in self._config.review_tools:
-                if fnmatch.fnmatch(action.tool_name.lower(), review_tool.lower()):
-                    return Decision.REVIEW, _make_violation(
-                        "review_tools", "tool_review",
-                        f"Tool '{action.tool_name}' requires review",
-                        Decision.REVIEW, ra,
-                    )
+        for pat in self._review_tool_patterns:
+            if pat.match(tool_lower):
+                return Decision.REVIEW, _make_violation(
+                    "review_tools", "tool_review",
+                    f"Tool '{action.tool_name}' requires review",
+                    Decision.REVIEW, ra,
+                )
 
         return Decision.ALLOW, None
 
@@ -249,10 +284,11 @@ class PolicyEngine:
 
         deny_unregistered_tools: tools blocked for auto-detected (unregistered) agents.
         """
-        if not is_registered and self._config.deny_unregistered_tools:
+        if not is_registered and self._unregistered_tool_patterns:
             ra = self._config.rule_annotations or None
-            for pattern in self._config.deny_unregistered_tools:
-                if fnmatch.fnmatch(action.tool_name.lower(), pattern.lower()):
+            tool_lower = action.tool_name.lower()
+            for pat in self._unregistered_tool_patterns:
+                if pat.match(tool_lower):
                     return Decision.BLOCK, _make_violation(
                         "deny_unregistered_tools", "abac",
                         f"Tool '{action.tool_name}' requires a registered agent identity. "
@@ -271,12 +307,12 @@ class PolicyEngine:
         Blocks actions whose input data originates from a denied source type.
         Addresses MITRE ATLAS AML.T0054 (Prompt Injection via Tool Outputs).
         """
-        if not self._config.deny_provenance_sources or not provenance_tags:
+        if not self._provenance_patterns or not provenance_tags:
             return Decision.ALLOW, None
         ra = self._config.rule_annotations or None
         for tag in provenance_tags:
-            for pattern in self._config.deny_provenance_sources:
-                if fnmatch.fnmatch(tag.source_type.value, pattern):
+            for pat in self._provenance_patterns:
+                if pat.match(tag.source_type.value):
                     return Decision.BLOCK, _make_violation(
                         "deny_provenance_sources", "provenance",
                         f"Action triggered by denied source '{tag.source_type.value}': {tag.label}",

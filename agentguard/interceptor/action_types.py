@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from agentguard.core.models import ActionType
 
 # Credential and sensitive path patterns — always triggers CREDENTIAL_ACCESS
-CREDENTIAL_PATTERNS: list[str] = [
+CREDENTIAL_PATTERNS: frozenset[str] = frozenset([
     ".ssh/id_rsa",
     ".ssh/id_ed25519",
     ".ssh/id_ecdsa",
@@ -25,7 +25,7 @@ CREDENTIAL_PATTERNS: list[str] = [
     "/etc/shadow",
     "/etc/sudoers",
     "credentials.json",
-]
+])
 
 CREDENTIAL_EXTENSIONS: set[str] = {".pem", ".key", ".p12", ".pfx", ".crt", ".cer"}
 
