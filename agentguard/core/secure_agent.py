@@ -91,10 +91,14 @@ class SecureAgent:
         log_level = os.getenv("AGENTGUARD_LOG_LEVEL", "INFO")
         configure_logging(log_level=log_level, json_logs=False)
 
-        # Resolve policy path: prefer explicit arg → env var → package default
-        _default_policy = str(
-            Path(__file__).parent.parent.parent / "policies" / "default.yaml"
-        )
+        # Resolve policy path:
+        #   1. Explicit argument
+        #   2. AGENTGUARD_POLICY_PATH env var
+        #   3. ./policies/default.yaml relative to CWD (git-repo users)
+        #   4. Bundled agentguard/policies/default.yaml (pip-installed users)
+        _cwd_policy = Path.cwd() / "policies" / "default.yaml"
+        _bundled_policy = Path(__file__).parent / "policies" / "default.yaml"
+        _default_policy = str(_cwd_policy if _cwd_policy.exists() else _bundled_policy)
         policy_file = policy_path or os.getenv("AGENTGUARD_POLICY_PATH", _default_policy)
 
         backend = create_backend(

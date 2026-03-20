@@ -56,13 +56,16 @@ dev       = [
     "maturin>=1.5",
 ]
 
+[project.scripts]
+agentguard = "agentguard.cli:main"
+
 [project.urls]
 Homepage   = "https://github.com/An33shh/AgentGuard"
 Repository = "https://github.com/An33shh/AgentGuard"
 Issues     = "https://github.com/An33shh/AgentGuard/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agentguard"]
+packages = ["agentguard", "api"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
@@ -70,7 +73,6 @@ exclude = [
     "venv/",
     "tests/",
     "examples/",
-    "api/",
     "dashboard/",
     "policies/",
     "tasks/",

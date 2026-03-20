@@ -118,7 +118,11 @@ def get_ledger() -> EventLedger:
 @lru_cache
 def get_policy_engine() -> PolicyEngine:
     """Get the global policy engine singleton."""
-    policy_path = os.getenv("AGENTGUARD_POLICY_PATH", "policies/default.yaml")
+    from pathlib import Path as _Path
+    _cwd_policy = _Path.cwd() / "policies" / "default.yaml"
+    _bundled_policy = _Path(__file__).parent.parent / "agentguard" / "policies" / "default.yaml"
+    _default = str(_cwd_policy if _cwd_policy.exists() else _bundled_policy)
+    policy_path = os.getenv("AGENTGUARD_POLICY_PATH", _default)
     return PolicyEngine.from_yaml(policy_path)
 
 

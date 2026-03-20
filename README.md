@@ -13,9 +13,9 @@
 
 *CrowdStrike for AI agents. Not a prompt filter — secures autonomous decisions at runtime.*
 
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![PyPI](https://img.shields.io/pypi/v/agentguard?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/agentguard)
+[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Tests](https://img.shields.io/badge/Tests-174%20passing-22c55e?style=flat-square&logo=pytest&logoColor=white)](#)
-[![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![License](https://img.shields.io/badge/License-MIT-6366f1?style=flat-square)](#license)
 
@@ -71,73 +71,85 @@ Blocked events are stored with full forensic detail — risk score, reason, poli
 
 ---
 
-## Prerequisites
+## Install
 
-- Python 3.12+
-- Node.js 18+
-- Docker (for Postgres + Redis) — or SQLite for zero-setup local dev
-- An API key for your chosen LLM provider (or Ollama running locally — no key needed)
+### pip (recommended)
+
+```bash
+pip install agentguard
+```
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap An33shh/agentguard
+brew install agentguard
+```
 
 ---
 
 ## Quickstart
 
-### 1. Clone and install
+### 1. Run the setup wizard
 
 ```bash
-git clone https://github.com/An33shh/AgentGuard.git
-cd AgentGuard
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+agentguard init
 ```
 
-### 2. Configure environment
+This walks you through choosing your LLM provider, entering your API key, and picking a database backend (SQLite for zero-setup local dev, Postgres for production). Creates a `.env` file in the current directory.
+
+### 2. Start the API server
 
 ```bash
-cp .env.example .env
-# Open .env and set your LLM provider API key — see "Switching LLM providers" below
+agentguard start
+# API: http://localhost:8000
+# Docs: http://localhost:8000/docs
 ```
 
-For zero-setup local dev (SQLite, no Docker):
+### 3. Run the attack demo
 
 ```bash
-echo "DATABASE_URL=sqlite+aiosqlite:///./agentguard.db" >> .env
+agentguard demo
 ```
 
-For Postgres + Redis (recommended):
+Runs 6 live scenarios through the guard — 5 attacks blocked (credential theft, data exfiltration, prompt injection, path traversal, domain blacklist), 1 legitimate action allowed.
+
+### 4. Check status
 
 ```bash
-docker-compose up -d postgres redis
-alembic upgrade head
+agentguard status
 ```
 
-### 3. Run the demo
+Shows liveness + readiness for each component (database, Redis, policy engine, analyzer).
 
-Verify everything works — 5 attack scenarios blocked, 1 legitimate action allowed:
-
-```bash
-python examples/demo_attack.py
-```
-
-### 4. Start the API
-
-```bash
-uvicorn api.main:app --reload
-# http://localhost:8000
-```
-
-Seed example data to populate the dashboard:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/demo/seed
-```
-
-### 5. Start the dashboard
+### 5. Start the dashboard (optional)
 
 ```bash
 cd dashboard && npm install && npm run dev
 # http://localhost:3000
 ```
+
+---
+
+### CLI reference
+
+```
+agentguard init      — interactive setup wizard (creates .env)
+agentguard start     — start the API server
+agentguard start --reload        — dev mode with auto-reload
+agentguard start --port 9000     — custom port
+agentguard demo      — run live attack scenario demo
+agentguard status    — check API + component health
+```
+
+---
+
+## Prerequisites
+
+- Python 3.12+
+- An API key for your chosen LLM provider (or Ollama running locally — no key needed)
+- Node.js 18+ (dashboard only)
+- Docker (Postgres + Redis) — or SQLite for zero-setup local dev
 
 ---
 
