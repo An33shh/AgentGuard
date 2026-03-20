@@ -152,12 +152,13 @@ class PolicyEngine:
             (re.compile(_glob_to_regex(os.path.expanduser(p).replace("\\", "/").rstrip("/"))), p)
             for p in (self._config.deny_path_patterns or [])
         ]
-        self._domain_patterns: list[tuple[str | None, str, str]] = []
+        # Domain patterns: *.xxx → fast suffix check; others → pre-compiled fnmatch regex
+        self._domain_patterns: list[tuple[str, re.Pattern[str] | None]] = []
         for p in (self._config.deny_domains or []):
             if p.startswith("*."):
-                self._domain_patterns.append((None, p[1:], "suffix"))
+                self._domain_patterns.append((p[1:], None))  # suffix string, no regex needed
             else:
-                self._domain_patterns.append((p, None, "exact"))
+                self._domain_patterns.append(("", re.compile(fnmatch.translate(p))))
         self._deny_tool_patterns: list[re.Pattern[str]] = [
             re.compile(fnmatch.translate(t.lower())) for t in (self._config.deny_tools or [])
         ]
@@ -248,18 +249,18 @@ class PolicyEngine:
         if action.type == ActionType.HTTP_REQUEST and self._domain_patterns:
             domain = extract_url_domain(action.parameters)
             if domain:
-                for exact_or_none, suffix_or_none, match_type in self._domain_patterns:
-                    if match_type == "suffix":
-                        if domain == suffix_or_none[1:] or domain.endswith(suffix_or_none):
+                for suffix, pat in self._domain_patterns:
+                    if suffix:  # *.xxx style: fast suffix check
+                        if domain == suffix[1:] or domain.endswith(suffix):
                             return Decision.BLOCK, _make_violation(
                                 "deny_domains", "domain_blacklist",
-                                f"Domain '{domain}' matches deny pattern '*.{suffix_or_none[1:]}'",
+                                f"Domain '{domain}' matches deny pattern '*.{suffix[1:]}'",
                                 Decision.BLOCK, ra,
                             )
-                    elif domain == exact_or_none:
+                    elif pat and pat.match(domain):  # fnmatch pattern (exact or wildcard)
                         return Decision.BLOCK, _make_violation(
                             "deny_domains", "domain_blacklist",
-                            f"Domain '{domain}' matches deny pattern '{exact_or_none}'",
+                            f"Domain '{domain}' matches deny pattern",
                             Decision.BLOCK, ra,
                         )
 
