@@ -5,8 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
+from agentguard.core.errors import AgentGuardHTTPError, ErrorCode
 from agentguard.core.models import Decision, Event, TimelineSummary
 from api.dependencies import LedgerDep
 
@@ -43,7 +45,7 @@ async def get_event(event_id: str, ledger: LedgerDep) -> Event:
     """Get full forensic detail for a single event."""
     event = await ledger.get_event(event_id)
     if not event:
-        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+        raise AgentGuardHTTPError(404, ErrorCode.NOT_FOUND, f"Event {event_id} not found")
     return event
 
 
@@ -64,7 +66,7 @@ async def get_timeline_summary(
     """Get summary statistics for a session."""
     summary = await ledger.get_timeline_summary(session_id)
     if not summary:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        raise AgentGuardHTTPError(404, ErrorCode.NOT_FOUND, f"Session {session_id} not found")
     return summary
 
 
@@ -80,23 +82,15 @@ async def get_stats(ledger: LedgerDep) -> dict:
     return await ledger.get_stats()
 
 
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 20
+
+
 @router.post("/events/search", response_model=list[Event])
 async def search_events(
+    body: SearchRequest,
     ledger: LedgerDep,
-    body: dict[str, Any],
 ) -> list[Event]:
-    """
-    Search events by text query.
-
-    In Phase 1: falls back to listing all events (full-text search via pgvector in Phase 2).
-    """
-    # Phase 1: simple filter by decision or risk
-    decision_filter = body.get("decision")
-    min_risk = body.get("min_risk")
-    limit = body.get("limit", 50)
-
-    return await ledger.list_events(
-        decision=Decision(decision_filter) if decision_filter else None,
-        min_risk=min_risk,
-        limit=limit,
-    )
+    """Search events by case-insensitive substring match on the reason field."""
+    return await ledger.search_events_fulltext(body.query, body.limit)

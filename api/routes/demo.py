@@ -61,19 +61,20 @@ async def seed_demo(interceptor: InterceptorDep) -> dict:
     """
     Run all 6 OpenClaw scenarios through the live interceptor and store in ledger.
 
-    Each call generates a fresh session_id so re-seeding doesn't corrupt
-    the previous run's data.
+    Attack scenarios run in one session (triggers realistic demotion after 3 blocks).
+    The legitimate baseline runs in its own session to avoid demotion interference.
+    Each call generates fresh session IDs so re-seeding creates a clean dataset.
     """
-    # Fresh session per seed so repeated calls don't pile events into one session
-    session_id = f"openclaw-demo-{uuid.uuid4().hex[:8]}"
+    attack_session = f"openclaw-demo-{uuid.uuid4().hex[:8]}"
+    baseline_session = f"openclaw-baseline-{uuid.uuid4().hex[:8]}"
     results = []
 
     for scenario in OPENCLAW_SCENARIOS:
+        sid = baseline_session if scenario.get("description", "").startswith("Legitimate") else attack_session
         decision, event = await interceptor.intercept(
             raw_payload=scenario["payload"],
             agent_goal=scenario["goal"],
-            session_id=session_id,
-            provenance={"source": "demo_seed", "description": scenario["description"]},
+            session_id=sid,
             framework="demo",
         )
         results.append({
@@ -92,6 +93,7 @@ async def seed_demo(interceptor: InterceptorDep) -> dict:
         "blocked": blocked,
         "reviewed": reviewed,
         "allowed": allowed,
-        "session_id": session_id,
+        "attack_session_id": attack_session,
+        "baseline_session_id": baseline_session,
         "results": results,
     }

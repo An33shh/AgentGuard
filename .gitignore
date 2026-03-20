@@ -16,6 +16,11 @@ build/
 .coverage
 htmlcov/
 
+# SQLite dev/test databases
+*.db
+*.db-shm
+*.db-wal
+
 # Node
 dashboard/node_modules/
 dashboard/.next/
