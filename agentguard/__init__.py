@@ -9,7 +9,7 @@ from agentguard.core.exceptions import (
     AnalyzerError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"
 __all__ = [
     "Action",
     "ActionType",

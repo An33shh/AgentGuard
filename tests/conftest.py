@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
-import pytest_asyncio
 
 from agentguard.analyzer.intent_analyzer import IntentAnalyzer
 from agentguard.core.models import Action, ActionType, Decision, RiskAssessment
@@ -11,6 +12,28 @@ from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
 from agentguard.policy.schema import PolicyConfig
+
+
+@pytest.fixture(autouse=True, scope="session")
+def flush_redis_rate_limit_keys():
+    """
+    Clear rate limiter Redis keys before each test session.
+
+    Prevents cross-run contamination when REDIS_URL is configured and a
+    previous test run left entries within the sliding window.
+    """
+    redis_url = os.getenv("REDIS_URL", "")
+    if redis_url:
+        try:
+            import redis as _redis
+            client = _redis.from_url(redis_url, socket_connect_timeout=1)
+            keys = client.keys("agentguard:rl:*")
+            if keys:
+                client.delete(*keys)
+            client.close()
+        except Exception:
+            pass  # Redis unavailable — tests use in-memory fallback
+    yield
 
 
 @pytest.fixture
@@ -85,7 +108,7 @@ class MockAnalyzer:
         """Pre-configure a risk score for a specific key."""
         self._custom_scores[key] = score
 
-    async def analyze(self, action: Action, agent_goal: str) -> RiskAssessment:
+    async def analyze(self, action: Action, agent_goal: str, session_context: list | None = None) -> RiskAssessment:
         """Return risk score based on action content."""
         params_str = str(action.parameters).lower()
         tool_name = action.tool_name.lower()

@@ -125,6 +125,61 @@ class TestReviewTools:
         assert decision == Decision.REVIEW
 
 
+class TestAllowTools:
+    """allow_tools is a deny-by-default allowlist — unlisted tools must be blocked."""
+
+    def test_allows_listed_tool(self) -> None:
+        engine = PolicyEngine(config=PolicyConfig(
+            name="allowlist-test",
+            risk_threshold=0.75,
+            review_threshold=0.60,
+            allow_tools=["file.read", "web_search"],
+        ))
+        action = make_action("file.read", {"path": "README.md"}, ActionType.FILE_READ)
+        decision, violation = engine.evaluate(action)
+        assert decision == Decision.ALLOW
+        assert violation is None
+
+    def test_blocks_unlisted_tool(self) -> None:
+        engine = PolicyEngine(config=PolicyConfig(
+            name="allowlist-test",
+            risk_threshold=0.75,
+            review_threshold=0.60,
+            allow_tools=["file.read"],
+        ))
+        action = make_action("email.send", {"to": "x@y.com"})
+        decision, violation = engine.evaluate(action)
+        assert decision == Decision.BLOCK
+        assert violation is not None
+        assert violation.rule_name == "allow_tools"
+
+    def test_allowlist_with_wildcard(self) -> None:
+        engine = PolicyEngine(config=PolicyConfig(
+            name="allowlist-test",
+            risk_threshold=0.75,
+            review_threshold=0.60,
+            allow_tools=["file.*"],
+        ))
+        decision, _ = engine.evaluate(make_action("file.read", {}, ActionType.FILE_READ))
+        assert decision == Decision.ALLOW
+        decision, _ = engine.evaluate(make_action("shell.execute", {}))
+        assert decision == Decision.BLOCK
+
+    def test_deny_tools_takes_priority_over_allow_tools(self) -> None:
+        """deny_tools is evaluated before allow_tools — a tool in both lists is blocked."""
+        engine = PolicyEngine(config=PolicyConfig(
+            name="priority-test",
+            risk_threshold=0.75,
+            review_threshold=0.60,
+            deny_tools=["bash"],
+            allow_tools=["bash", "file.read"],
+        ))
+        action = make_action("bash", {"command": "ls"})
+        decision, violation = engine.evaluate(action)
+        assert decision == Decision.BLOCK
+        assert violation.rule_name == "deny_tools"
+
+
 class TestPolicyReload:
     def test_reload_from_yaml(self, tmp_path) -> None:
         import yaml

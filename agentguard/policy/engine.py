@@ -1,15 +1,19 @@
 """Deterministic YAML-based policy rule evaluation.
 
 Runs synchronously — zero latency, no LLM calls.
-Evaluation order:
-  1. session_limits   → BLOCK (before everything else)
-  2. deny_tools       → BLOCK
-  3. allow_tools      → BLOCK if tool not in allowlist (when list is non-empty)
-  4. deny_path_patterns → BLOCK (glob with ** support)
-  5. credential_access → BLOCK (belt-and-suspenders)
-  6. deny_domains     → BLOCK (domain matching)
-  7. review_tools     → REVIEW
-  8. default          → ALLOW
+
+Full evaluation order (including interceptor-level checks):
+  0. session_limits           → BLOCK (Interceptor, before any policy call)
+  1. ABAC                     → BLOCK (Interceptor: evaluate_abac, deny_unregistered_tools)
+  2. deny_tools               → BLOCK (evaluate)
+  3. allow_tools              → BLOCK if tool not in allowlist (evaluate)
+  3.5 deny_provenance_sources → BLOCK (evaluate_provenance, MITRE ATLAS AML.T0054)
+  4. deny_path_patterns       → BLOCK glob with ** support (evaluate)
+  5. credential_access        → BLOCK belt-and-suspenders (evaluate)
+  6. deny_domains             → BLOCK domain matching (evaluate)
+  7. review_tools             → REVIEW (evaluate)
+  8. default                  → ALLOW (evaluate)
+  9. risk_threshold           → BLOCK/REVIEW (evaluate_risk, after LLM analysis)
 """
 
 from __future__ import annotations
@@ -21,11 +25,48 @@ from typing import Any
 
 import structlog
 
-from agentguard.core.models import Action, ActionType, Decision, PolicyViolation
+from agentguard.core.models import Action, ActionType, Decision, PolicyViolation, ProvenanceTag
 from agentguard.interceptor.action_types import extract_file_path, extract_url_domain
-from agentguard.policy.schema import PolicyConfig
+from agentguard.policy.schema import PolicyConfig, RuleAnnotation
+from agentguard.taxonomy import lookup_by_rule_type
 
 logger = structlog.get_logger(__name__)
+
+
+def _make_violation(
+    rule_name: str,
+    rule_type: str,
+    detail: str,
+    decision: Decision,
+    rule_annotations: dict[str, RuleAnnotation] | None = None,
+) -> PolicyViolation:
+    """
+    Construct a PolicyViolation auto-annotated with MITRE ATLAS and OWASP taxonomy.
+
+    Auto-detects taxonomy from RULE_TYPE_TO_TAXONOMY; merges (union) any per-rule
+    overrides from the policy YAML rule_annotations block.
+    """
+    mapping = lookup_by_rule_type(rule_type)
+    atlas_ids = list(mapping.atlas_ids)
+    owasp_cats = [c.value for c in mapping.owasp_categories]
+
+    if rule_annotations and rule_name in rule_annotations:
+        override = rule_annotations[rule_name]
+        for aid in override.mitre_atlas_ids:
+            if aid not in atlas_ids:
+                atlas_ids.append(aid)
+        for cat in override.owasp_categories:
+            if cat not in owasp_cats:
+                owasp_cats.append(cat)
+
+    return PolicyViolation(
+        rule_name=rule_name,
+        rule_type=rule_type,
+        detail=detail,
+        decision=decision,
+        mitre_atlas_ids=atlas_ids,
+        owasp_categories=owasp_cats,
+    )
 
 
 def _domain_matches(domain: str, pattern: str) -> bool:
@@ -59,6 +100,9 @@ def _glob_to_regex(pattern: str) -> str:
     return "".join(parts)
 
 
+_MAX_PATH_LEN = 4096
+
+
 def _path_matches(path: str, pattern: str) -> bool:
     """
     Match a file path against a glob pattern.
@@ -69,6 +113,10 @@ def _path_matches(path: str, pattern: str) -> bool:
     - * for any characters within a single segment
     - ? for a single character
     """
+    # Guard against ReDoS: adversarially long paths can cause quadratic
+    # backtracking in the ** glob regex. Real file paths are never this long.
+    if len(path) > _MAX_PATH_LEN:
+        return False
     # Normalise separators and expand ~ in both sides
     expanded_path = os.path.expanduser(path).replace("\\", "/").rstrip("/")
     expanded_pattern = os.path.expanduser(pattern).replace("\\", "/").rstrip("/")
@@ -121,17 +169,17 @@ class PolicyEngine:
         Returns (Decision, PolicyViolation | None).
         Does NOT evaluate risk_threshold — call evaluate_risk() separately.
         """
+        ra = self._config.rule_annotations or None
+
         # Rule 1: deny_tools
         if self._config.deny_tools:
             for denied_tool in self._config.deny_tools:
                 if fnmatch.fnmatch(action.tool_name.lower(), denied_tool.lower()):
-                    violation = PolicyViolation(
-                        rule_name="deny_tools",
-                        rule_type="tool_blacklist",
-                        detail=f"Tool '{action.tool_name}' is in deny list",
-                        decision=Decision.BLOCK,
+                    return Decision.BLOCK, _make_violation(
+                        "deny_tools", "tool_blacklist",
+                        f"Tool '{action.tool_name}' is in deny list",
+                        Decision.BLOCK, ra,
                     )
-                    return Decision.BLOCK, violation
 
         # Rule 2: allow_tools — if configured, tool MUST be in the allowlist
         if self._config.allow_tools:
@@ -140,13 +188,11 @@ class PolicyEngine:
                 for p in self._config.allow_tools
             )
             if not in_allowlist:
-                violation = PolicyViolation(
-                    rule_name="allow_tools",
-                    rule_type="tool_allowlist",
-                    detail=f"Tool '{action.tool_name}' is not in the allow list",
-                    decision=Decision.BLOCK,
+                return Decision.BLOCK, _make_violation(
+                    "allow_tools", "tool_allowlist",
+                    f"Tool '{action.tool_name}' is not in the allow list",
+                    Decision.BLOCK, ra,
                 )
-                return Decision.BLOCK, violation
 
         # Rule 3: deny_path_patterns (applies to file operations)
         if action.type in (ActionType.FILE_READ, ActionType.FILE_WRITE, ActionType.CREDENTIAL_ACCESS):
@@ -154,24 +200,20 @@ class PolicyEngine:
             if path and self._config.deny_path_patterns:
                 for pattern in self._config.deny_path_patterns:
                     if _path_matches(path, pattern):
-                        violation = PolicyViolation(
-                            rule_name="deny_path_patterns",
-                            rule_type="path_blacklist",
-                            detail=f"Path '{path}' matches deny pattern '{pattern}'",
-                            decision=Decision.BLOCK,
+                        return Decision.BLOCK, _make_violation(
+                            "deny_path_patterns", "path_blacklist",
+                            f"Path '{path}' matches deny pattern '{pattern}'",
+                            Decision.BLOCK, ra,
                         )
-                        return Decision.BLOCK, violation
 
         # Rule 4: Always block CREDENTIAL_ACCESS type (belt-and-suspenders)
         if action.type == ActionType.CREDENTIAL_ACCESS:
             path = extract_file_path(action.parameters)
-            violation = PolicyViolation(
-                rule_name="credential_access",
-                rule_type="credential_pattern",
-                detail=f"Credential path detected: {path or action.tool_name}",
-                decision=Decision.BLOCK,
+            return Decision.BLOCK, _make_violation(
+                "credential_access", "credential_pattern",
+                f"Credential path detected: {path or action.tool_name}",
+                Decision.BLOCK, ra,
             )
-            return Decision.BLOCK, violation
 
         # Rule 5: deny_domains
         if action.type == ActionType.HTTP_REQUEST and self._config.deny_domains:
@@ -179,47 +221,113 @@ class PolicyEngine:
             if domain:
                 for pattern in self._config.deny_domains:
                     if _domain_matches(domain, pattern):
-                        violation = PolicyViolation(
-                            rule_name="deny_domains",
-                            rule_type="domain_blacklist",
-                            detail=f"Domain '{domain}' matches deny pattern '{pattern}'",
-                            decision=Decision.BLOCK,
+                        return Decision.BLOCK, _make_violation(
+                            "deny_domains", "domain_blacklist",
+                            f"Domain '{domain}' matches deny pattern '{pattern}'",
+                            Decision.BLOCK, ra,
                         )
-                        return Decision.BLOCK, violation
 
         # Rule 6: review_tools
         if self._config.review_tools:
             for review_tool in self._config.review_tools:
                 if fnmatch.fnmatch(action.tool_name.lower(), review_tool.lower()):
-                    violation = PolicyViolation(
-                        rule_name="review_tools",
-                        rule_type="tool_review",
-                        detail=f"Tool '{action.tool_name}' requires review",
-                        decision=Decision.REVIEW,
+                    return Decision.REVIEW, _make_violation(
+                        "review_tools", "tool_review",
+                        f"Tool '{action.tool_name}' requires review",
+                        Decision.REVIEW, ra,
                     )
-                    return Decision.REVIEW, violation
 
         return Decision.ALLOW, None
 
-    def evaluate_risk(self, risk_score: float) -> tuple[Decision, PolicyViolation | None]:
-        """Evaluate risk score against policy thresholds."""
-        if risk_score >= self._config.risk_threshold:
-            violation = PolicyViolation(
-                rule_name="risk_threshold",
-                rule_type="risk_score",
-                detail=f"Risk score {risk_score:.2f} >= threshold {self._config.risk_threshold}",
-                decision=Decision.BLOCK,
-            )
-            return Decision.BLOCK, violation
+    def evaluate_abac(
+        self,
+        action: Action,
+        is_registered: bool,
+    ) -> tuple[Decision, PolicyViolation | None]:
+        """
+        Attribute-Based Access Control evaluation.
 
-        if risk_score >= self._config.review_threshold:
-            violation = PolicyViolation(
-                rule_name="review_threshold",
-                rule_type="risk_score",
-                detail=f"Risk score {risk_score:.2f} >= review threshold {self._config.review_threshold}",
-                decision=Decision.REVIEW,
+        deny_unregistered_tools: tools blocked for auto-detected (unregistered) agents.
+        """
+        if not is_registered and self._config.deny_unregistered_tools:
+            ra = self._config.rule_annotations or None
+            for pattern in self._config.deny_unregistered_tools:
+                if fnmatch.fnmatch(action.tool_name.lower(), pattern.lower()):
+                    return Decision.BLOCK, _make_violation(
+                        "deny_unregistered_tools", "abac",
+                        f"Tool '{action.tool_name}' requires a registered agent identity. "
+                        "Provide an explicit agent_id to use this tool.",
+                        Decision.BLOCK, ra,
+                    )
+        return Decision.ALLOW, None
+
+    def evaluate_provenance(
+        self,
+        provenance_tags: list[ProvenanceTag],
+    ) -> tuple[Decision, PolicyViolation | None]:
+        """
+        Evaluate provenance tags against the deny_provenance_sources policy.
+
+        Blocks actions whose input data originates from a denied source type.
+        Addresses MITRE ATLAS AML.T0054 (Prompt Injection via Tool Outputs).
+        """
+        if not self._config.deny_provenance_sources or not provenance_tags:
+            return Decision.ALLOW, None
+        ra = self._config.rule_annotations or None
+        for tag in provenance_tags:
+            for pattern in self._config.deny_provenance_sources:
+                if fnmatch.fnmatch(tag.source_type.value, pattern):
+                    return Decision.BLOCK, _make_violation(
+                        "deny_provenance_sources", "provenance",
+                        f"Action triggered by denied source '{tag.source_type.value}': {tag.label}",
+                        Decision.BLOCK, ra,
+                    )
+        return Decision.ALLOW, None
+
+    def effective_thresholds(self, session_blocked: int) -> tuple[float, float]:
+        """
+        Return (risk_threshold, review_threshold) for this session.
+
+        If demotion is enabled and the session has accumulated enough blocks,
+        tighter thresholds are returned automatically — no restart needed.
+        """
+        cfg = self._config.demotion
+        if cfg.enabled and session_blocked >= cfg.trigger_blocked_count:
+            return cfg.demoted_risk_threshold, cfg.demoted_review_threshold
+        return self._config.risk_threshold, self._config.review_threshold
+
+    def evaluate_risk(
+        self,
+        risk_score: float,
+        risk_threshold: float | None = None,
+        review_threshold: float | None = None,
+    ) -> tuple[Decision, PolicyViolation | None]:
+        """Evaluate risk score against policy thresholds (supports demotion overrides)."""
+        threshold = risk_threshold if risk_threshold is not None else self._config.risk_threshold
+        r_threshold = review_threshold if review_threshold is not None else self._config.review_threshold
+        # Only validate cross-threshold ordering when both are explicitly overridden —
+        # if only one is overridden the caller is responsible for providing a consistent pair
+        # (effective_thresholds() always returns a validated pair).
+        if risk_threshold is not None and review_threshold is not None and r_threshold >= threshold:
+            raise ValueError(
+                f"review_threshold ({r_threshold}) must be less than risk_threshold ({threshold})"
             )
-            return Decision.REVIEW, violation
+
+        ra = self._config.rule_annotations or None
+
+        if risk_score >= threshold:
+            return Decision.BLOCK, _make_violation(
+                "risk_threshold", "risk_score",
+                f"Risk score {risk_score:.2f} >= threshold {threshold:.2f}",
+                Decision.BLOCK, ra,
+            )
+
+        if risk_score >= r_threshold:
+            return Decision.REVIEW, _make_violation(
+                "review_threshold", "risk_score",
+                f"Risk score {risk_score:.2f} >= review threshold {r_threshold:.2f}",
+                Decision.REVIEW, ra,
+            )
 
         return Decision.ALLOW, None
 
@@ -230,20 +338,17 @@ class PolicyEngine:
     ) -> tuple[Decision, PolicyViolation | None]:
         """Check whether a session has exceeded its configured limits."""
         limits = self._config.session_limits
+        ra = self._config.rule_annotations or None
         if limits.max_actions and session_actions >= limits.max_actions:
-            violation = PolicyViolation(
-                rule_name="session_limits",
-                rule_type="session_max_actions",
-                detail=f"Session has reached the max_actions limit ({limits.max_actions})",
-                decision=Decision.BLOCK,
+            return Decision.BLOCK, _make_violation(
+                "session_limits", "session_max_actions",
+                f"Session has reached the max_actions limit ({limits.max_actions})",
+                Decision.BLOCK, ra,
             )
-            return Decision.BLOCK, violation
         if limits.max_blocked and session_blocked >= limits.max_blocked:
-            violation = PolicyViolation(
-                rule_name="session_limits",
-                rule_type="session_max_blocked",
-                detail=f"Session has reached the max_blocked limit ({limits.max_blocked})",
-                decision=Decision.BLOCK,
+            return Decision.BLOCK, _make_violation(
+                "session_limits", "session_max_blocked",
+                f"Session has reached the max_blocked limit ({limits.max_blocked})",
+                Decision.BLOCK, ra,
             )
-            return Decision.BLOCK, violation
         return Decision.ALLOW, None

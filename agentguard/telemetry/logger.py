@@ -4,8 +4,20 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextvars import ContextVar
+from typing import Any
 
 import structlog
+
+request_id_ctx_var: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+def _inject_request_id(
+    logger: Any, method: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Structlog processor that injects the current request_id."""
+    event_dict["request_id"] = request_id_ctx_var.get()
+    return event_dict
 
 
 def configure_logging(log_level: str = "INFO", json_logs: bool = True) -> None:
@@ -14,6 +26,7 @@ def configure_logging(log_level: str = "INFO", json_logs: bool = True) -> None:
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        _inject_request_id,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),

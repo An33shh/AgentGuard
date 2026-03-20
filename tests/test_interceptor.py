@@ -6,6 +6,8 @@ import pytest
 
 from agentguard.core.models import ActionType, Decision
 from agentguard.interceptor.interceptor import ActionNormalizer, Interceptor
+from agentguard.policy.engine import PolicyEngine
+from agentguard.policy.schema import SessionLimits
 
 
 class TestActionNormalizer:
@@ -129,3 +131,91 @@ class TestInterceptor:
             session_id="risk-test",
         )
         assert decision == Decision.BLOCK
+
+    @pytest.mark.asyncio
+    async def test_review_decision_propagates(
+        self, interceptor: Interceptor, mock_analyzer
+    ) -> None:
+        """Risk score in the review band (0.60–0.74) returns REVIEW, not ALLOW."""
+        mock_analyzer.set_score("special_tool", 0.65)
+        decision, event = await interceptor.intercept(
+            raw_payload={"tool_name": "special_tool", "parameters": {}},
+            agent_goal="Some task",
+            session_id="review-test",
+        )
+        assert decision == Decision.REVIEW
+
+    @pytest.mark.asyncio
+    async def test_session_max_actions_enforced(
+        self, policy_engine, event_ledger, mock_analyzer
+    ) -> None:
+        """Interceptor blocks once session reaches max_actions limit."""
+        tight_engine = PolicyEngine(config=policy_engine.config.model_copy(
+            update={"session_limits": SessionLimits(max_actions=3, max_blocked=100)}
+        ))
+        inter = Interceptor(
+            analyzer=mock_analyzer,
+            policy_engine=tight_engine,
+            event_ledger=event_ledger,
+        )
+        session = "limit-test"
+        payload = {"tool_name": "file.read", "parameters": {"path": "README.md"}}
+        for _ in range(3):
+            d, _ = await inter.intercept(raw_payload=payload, agent_goal="Task", session_id=session)
+            assert d == Decision.ALLOW
+
+        # 4th request must be blocked by session limit
+        d, event = await inter.intercept(raw_payload=payload, agent_goal="Task", session_id=session)
+        assert d == Decision.BLOCK
+        assert event.policy_violation is not None
+        assert event.policy_violation.rule_name == "session_limits"
+
+    @pytest.mark.asyncio
+    async def test_session_max_blocked_enforced(
+        self, policy_engine, event_ledger, mock_analyzer
+    ) -> None:
+        """Interceptor blocks once session reaches max_blocked limit."""
+        tight_engine = PolicyEngine(config=policy_engine.config.model_copy(
+            update={"session_limits": SessionLimits(max_actions=100, max_blocked=2)}
+        ))
+        inter = Interceptor(
+            analyzer=mock_analyzer,
+            policy_engine=tight_engine,
+            event_ledger=event_ledger,
+        )
+        session = "blocked-limit-test"
+        deny_payload = {"tool_name": "bash", "parameters": {}}
+        for _ in range(2):
+            d, _ = await inter.intercept(raw_payload=deny_payload, agent_goal="Task", session_id=session)
+            assert d == Decision.BLOCK
+
+        # Any further action is now blocked by max_blocked session limit
+        d, event = await inter.intercept(
+            raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
+            agent_goal="Task",
+            session_id=session,
+        )
+        assert d == Decision.BLOCK
+        assert event.policy_violation.rule_name == "session_limits"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_error_fails_closed(
+        self, policy_engine, event_ledger
+    ) -> None:
+        """If the analyzer raises an unexpected exception, intercept() blocks fail-closed."""
+        from unittest.mock import AsyncMock
+
+        broken_analyzer = AsyncMock()
+        broken_analyzer.analyze = AsyncMock(side_effect=RuntimeError("unexpected crash"))
+        inter = Interceptor(
+            analyzer=broken_analyzer,
+            policy_engine=policy_engine,
+            event_ledger=event_ledger,
+        )
+        decision, event = await inter.intercept(
+            raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
+            agent_goal="Summarize",
+            session_id="error-test",
+        )
+        assert decision == Decision.BLOCK
+        assert "pipeline_error" in event.assessment.indicators
