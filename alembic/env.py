@@ -27,8 +27,12 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # Alembic requires a sync driver — strip +asyncpg so psycopg2 is used
+    cfg = config.get_section(config.config_ini_section, {})
+    if "sqlalchemy.url" in cfg:
+        cfg["sqlalchemy.url"] = cfg["sqlalchemy.url"].replace("+asyncpg", "")
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        cfg,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

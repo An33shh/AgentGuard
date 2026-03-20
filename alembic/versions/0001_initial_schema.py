@@ -18,9 +18,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Enable pgvector extension
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-
     op.create_table(
         "sessions",
         sa.Column("session_id", sa.String(64), primary_key=True),
@@ -35,7 +32,7 @@ def upgrade() -> None:
     op.create_table(
         "events",
         sa.Column("event_id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("session_id", sa.String(64), nullable=False, index=True),
+        sa.Column("session_id", sa.String(64), nullable=False),
         sa.Column("agent_goal", sa.Text, nullable=False),
         sa.Column("framework", sa.String(64), nullable=False),
         sa.Column("action_id", sa.String(64), nullable=False),
