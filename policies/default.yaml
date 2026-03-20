@@ -14,7 +14,7 @@ policy:
     - "terminal"
 
   deny_path_patterns:
-    - "~/.ssh/**"
+    - "~/.ssh/**" 
     - "~/.ssh/id_rsa"
     - "~/.ssh/id_ed25519"
     - "~/.ssh/authorized_keys"
@@ -57,3 +57,44 @@ policy:
   session_limits:
     max_actions: 100
     max_blocked: 10
+
+  # ABAC: in production every agent will be registered with an explicit agent_id.
+  # If an action arrives without one it is either a dev/test oversight or a rogue agent.
+  # These tools are blocked for any unregistered caller as a defensive default.
+  # NOTE: git.push and email.send also appear in review_tools above.
+  #   - Registered agents  → REVIEW  (review_tools fires in evaluate())
+  #   - Unregistered agents → BLOCK  (ABAC fires first, before evaluate())
+  deny_unregistered_tools:
+    - "git.push"
+    - "git.commit"
+    - "file.delete"
+    - "email.send"
+
+  # Provenance-based blocking (MITRE ATLAS AML.T0054 — Prompt Injection via Tool Outputs)
+  # Uncomment to block actions triggered by external content or prior tool outputs:
+  # deny_provenance_sources:
+  #   - "external_data"   # block if action was driven by a web page / API response / file
+  #   - "tool_output"     # block if action was driven by output from a previous tool call
+
+  # Dynamic session demotion — tighten thresholds after repeated violations
+  demotion:
+    enabled: true
+    trigger_blocked_count: 3       # demote after 3 blocks in one session
+    demoted_risk_threshold: 0.50   # was 0.75 — much stricter when demoted
+    demoted_review_threshold: 0.35 # was 0.60
+
+  # Phase 8: MITRE ATLAS / OWASP Agentic AI taxonomy overrides per rule.
+  # Auto-detection fills these from the taxonomy module; entries here are merged (union).
+  rule_annotations:
+    deny_tools:
+      mitre_atlas_ids: ["AML.T0051", "AML.T0043"]
+      owasp_categories: ["AA02"]
+      notes: "Shell/execution tools blocked — LLM Prompt Injection and Craft Adversarial Data patterns"
+    credential_access:
+      mitre_atlas_ids: ["AML.T0058"]
+      owasp_categories: ["AA03", "AA06"]
+      notes: "Belt-and-suspenders credential path block — Credential Access via Agent"
+    deny_provenance_sources:
+      mitre_atlas_ids: ["AML.T0054"]
+      owasp_categories: ["AA01"]
+      notes: "Prompt injection prevention via provenance tracking (MITRE ATLAS AML.T0054)"

@@ -61,3 +61,13 @@ policy:
   session_limits:
     max_actions: 50
     max_blocked: 2
+
+  rule_annotations:
+    deny_tools:
+      mitre_atlas_ids: ["AML.T0051", "AML.T0043"]
+      owasp_categories: ["AA02"]
+      notes: "Strict mode — all shell/execution tools blocked"
+    credential_access:
+      mitre_atlas_ids: ["AML.T0058"]
+      owasp_categories: ["AA03", "AA06"]
+      notes: "Credential path block — Credential Access via Agent"
