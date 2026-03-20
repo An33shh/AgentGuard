@@ -4,9 +4,7 @@ class Agentguard < Formula
   desc "Runtime detection and response for AI agents"
   homepage "https://github.com/An33shh/AgentGuard"
   url "https://files.pythonhosted.org/packages/source/a/agentguard/agentguard-0.9.0.tar.gz"
-  # Update sha256 after publishing to PyPI:
-  #   curl -sL <url> | shasum -a 256
-  sha256 "PLACEHOLDER_UPDATE_AFTER_PYPI_PUBLISH"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
   depends_on "python@3.12"

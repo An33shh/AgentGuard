@@ -1,0 +1,59 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-formula:
+    name: Update Formula/agentguard.rb
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get release version
+        id: version
+        # GITHUB_REF_NAME comes from the runner environment, not user input
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for PyPI tarball to be available
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          URL="https://files.pythonhosted.org/packages/source/a/agentguard/agentguard-${VERSION}.tar.gz"
+          for i in $(seq 1 12); do
+            if curl -sf --head "$URL" > /dev/null; then
+              echo "PyPI tarball is live."
+              exit 0
+            fi
+            echo "Attempt $i: not yet available, waiting 30s..."
+            sleep 30
+          done
+          echo "Timed out waiting for PyPI tarball" && exit 1
+
+      - name: Compute sha256 and update formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          URL="https://files.pythonhosted.org/packages/source/a/agentguard/agentguard-${VERSION}.tar.gz"
+          SHA=$(curl -sL "$URL" | shasum -a 256 | awk '{print $1}')
+
+          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/agentguard.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA}\"|" Formula/agentguard.rb
+
+          echo "Updated formula: version=${VERSION} sha256=${SHA}"
+
+      - name: Commit updated formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/agentguard.rb
+          git diff --cached --quiet || git commit -m "chore: bump Homebrew formula to v${VERSION}"
+          git push
