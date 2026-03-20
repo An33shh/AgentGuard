@@ -65,16 +65,14 @@ Repository = "https://github.com/An33shh/AgentGuard"
 Issues     = "https://github.com/An33shh/AgentGuard/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["agentguard", "api"]
+packages = ["agentguard", "api", "examples"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-    ".env*",
+    ".env",
+    ".env.dev",
+    ".env.production",
     "venv/",
-    "tests/",
-    "examples/",
-    "dashboard/",
-    "policies/",
     "tasks/",
     "agentguard_rs/target/",
     "*.db",
