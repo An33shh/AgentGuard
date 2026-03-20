@@ -15,19 +15,19 @@ export default async function EventsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Events</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <h1 className="text-xl font-semibold text-[#E6EDF3] tracking-tight">Events</h1>
+        <p className="text-sm text-[#484F58] mt-0.5">
           All intercepted agent actions with filtering and search
         </p>
       </div>
 
       {apiError && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
+        <div className="bg-[#E88C30]/8 border border-[#E88C30]/20 rounded-xl p-4 text-sm text-[#E88C30]">
           API unavailable — start the API server first.
         </div>
       )}
 
-      <EventTable events={events} />
+      <EventTable initialEvents={events} />
     </div>
   );
 }

@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getEvent } from "@/lib/api";
-import { getRiskLevel, getRiskColor, getDecisionColor } from "@/types";
+import { getRiskLevel } from "@/types";
 import { formatDate } from "@/lib/utils";
+import { ProvenancePanel } from "@/components/events/ProvenancePanel";
+import { ThreatTaxonomyPanel } from "@/components/events/ThreatTaxonomyPanel";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -10,159 +12,166 @@ interface Props {
 
 function RiskGauge({ score }: { score: number }) {
   const level = getRiskLevel(score);
-  const color = getRiskColor(level);
-  const barColors: Record<string, string> = {
-    low: "bg-green-500",
-    medium: "bg-yellow-500",
-    high: "bg-orange-500",
-    critical: "bg-red-500",
+  const colors: Record<string, { text: string; bar: string }> = {
+    low:      { text: "text-[#3FB950]", bar: "bg-[#3FB950]" },
+    medium:   { text: "text-[#D29922]", bar: "bg-[#D29922]" },
+    high:     { text: "text-[#F85149]", bar: "bg-[#F85149]" },
+    critical: { text: "text-[#F85149]", bar: "bg-[#F85149]" },
   };
+  const { text, bar } = colors[level];
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <div className={`text-4xl font-bold ${color}`}>
+      <div className={`text-4xl font-bold font-mono tabular-nums ${text}`}>
         {(score * 100).toFixed(1)}%
       </div>
-      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full ${barColors[level]} transition-all`}
-          style={{ width: `${score * 100}%` }}
-        />
+      <div className="w-full h-1.5 bg-[#1C2844] rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${bar} transition-all`} style={{ width: `${score * 100}%` }} />
       </div>
-      <span className={`text-sm font-medium uppercase tracking-wide ${color}`}>
+      <span className={`text-xs font-medium uppercase tracking-widest ${text}`}>
         {level} risk
       </span>
     </div>
   );
 }
 
+function formatActionType(raw: string): string {
+  return raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-[#0C1220] rounded-xl border border-[#1C2844] p-6">
+      <h2 className="text-xs font-semibold text-[#6E7D91] uppercase tracking-wider mb-5">{title}</h2>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <dt className="text-xs text-[#484F58] uppercase tracking-wider">{label}</dt>
+      <dd className={`mt-0.5 break-all text-sm text-[#A0AEBB] ${mono ? "font-mono" : ""}`}>{value}</dd>
+    </div>
+  );
+}
+
 export default async function EventDetailPage({ params }: Props) {
   const { id } = await params;
-
-  // `.catch(() => null)` lets notFound() short-circuit while keeping TypeScript happy
   const event = await getEvent(id).catch(() => null);
   if (!event) notFound();
 
-  const decisionStyle = getDecisionColor(event.decision);
+  const showGoalAligned = event.assessment.analyzer_model !== "policy_engine";
+
+  const decisionColors: Record<string, string> = {
+    block: "bg-[#F85149]/10 text-[#F85149] border border-[#F85149]/20",
+    review: "bg-[#D29922]/10 text-[#D29922] border border-[#D29922]/20",
+    allow: "bg-[#3FB950]/10 text-[#3FB950] border border-[#3FB950]/20",
+  };
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div className="flex items-center gap-3">
-        <Link href="/events" className="text-sm text-gray-500 hover:text-gray-700">
-          ← Events
+    <div className="space-y-5 max-w-4xl">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm text-[#484F58]">
+        <Link href="/events" className="hover:text-[#8B949E] transition-colors">
+          Events
         </Link>
-        <span className="text-gray-300">/</span>
-        <span className="text-sm font-mono text-gray-600">{event.event_id.slice(0, 16)}…</span>
+        <span className="text-[#243354]">/</span>
+        <span className="text-[#6E7D91] font-mono">{event.event_id.slice(0, 16)}…</span>
       </div>
 
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Forensic Investigation</h1>
-        <span className={`px-3 py-1 rounded-full text-sm font-medium ${decisionStyle}`}>
+        <h1 className="text-xl font-semibold text-[#E6EDF3] tracking-tight">Forensic Investigation</h1>
+        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${decisionColors[event.decision]}`}>
           {event.decision.toUpperCase()}
         </span>
       </div>
 
+      {/* Three-panel row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Risk Assessment */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
-            Risk Assessment
-          </h2>
+        <Panel title="Risk Assessment">
           <RiskGauge score={event.assessment.risk_score} />
-          <p className="text-sm text-gray-600 mt-4 text-center">
+          <p className="text-xs text-[#6E7D91] mt-4 text-center leading-relaxed">
             {event.assessment.reason}
           </p>
           {event.assessment.indicators.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-3 justify-center">
+            <div className="flex flex-wrap gap-1.5 mt-3 justify-center">
               {event.assessment.indicators.map((ind) => (
-                <span key={ind} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                <span key={ind} className="text-xs bg-[#101828] text-[#6E7D91] border border-[#243354] px-2 py-0.5 rounded font-mono">
                   {ind}
                 </span>
               ))}
             </div>
           )}
-          <p className="text-xs text-gray-400 text-center mt-3">
-            Model: {event.assessment.analyzer_model} · {event.assessment.latency_ms.toFixed(0)}ms
+          <p className="text-xs text-[#3A4A5C] text-center mt-3 tabular-nums">
+            {event.assessment.analyzer_model} · {event.assessment.latency_ms.toFixed(0)}ms
           </p>
-        </div>
+        </Panel>
 
-        {/* Action Panel */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
-            Action
-          </h2>
-          <dl className="space-y-3 text-sm">
-            {[
-              ["Tool", event.action.tool_name],
-              ["Type", event.action.type],
-              ["Framework", event.framework],
-              ["Session", event.session_id],
-              ["Timestamp", formatDate(event.timestamp)],
-            ].map(([label, value]) => (
-              <div key={label}>
-                <dt className="text-xs text-gray-400 uppercase tracking-wide">{label}</dt>
-                <dd className="font-mono text-gray-800 mt-0.5 break-all">{value}</dd>
-              </div>
-            ))}
+        {/* Action */}
+        <Panel title="Action">
+          <dl className="space-y-3.5">
+            <Field label="Tool" value={event.action.tool_name} mono />
+            <Field label="Type" value={formatActionType(event.action.type)} />
+            <Field label="Framework" value={event.framework} />
+            <Field label="Session" value={event.session_id} mono />
+            <Field label="Timestamp" value={formatDate(event.timestamp)} />
           </dl>
-        </div>
+        </Panel>
 
-        {/* Policy Panel */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
-            Policy
-          </h2>
+        {/* Policy */}
+        <Panel title="Policy">
           {event.policy_violation ? (
-            <dl className="space-y-3 text-sm">
-              {[
-                ["Rule", event.policy_violation.rule_name],
-                ["Type", event.policy_violation.rule_type],
-                ["Detail", event.policy_violation.detail],
-                ["Goal Aligned", event.assessment.is_goal_aligned ? "Yes" : "No"],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt className="text-xs text-gray-400 uppercase tracking-wide">{label}</dt>
-                  <dd className="text-gray-800 mt-0.5 break-all">{value}</dd>
-                </div>
-              ))}
+            <dl className="space-y-3.5">
+              <Field label="Rule" value={event.policy_violation.rule_name} mono />
+              <Field label="Type" value={event.policy_violation.rule_type} mono />
+              <Field label="Detail" value={event.policy_violation.detail} />
+              {showGoalAligned && (
+                <Field label="Goal Aligned" value={event.assessment.is_goal_aligned ? "Yes" : "No"} />
+              )}
             </dl>
           ) : (
-            <div className="space-y-3 text-sm">
-              <p className="text-gray-500">No policy rule triggered.</p>
-              <dl>
-                <div>
-                  <dt className="text-xs text-gray-400 uppercase tracking-wide">Goal Aligned</dt>
-                  <dd className="text-gray-800 mt-0.5">
-                    {event.assessment.is_goal_aligned ? "Yes" : "No"}
-                  </dd>
-                </div>
-              </dl>
+            <div className="space-y-3.5">
+              <p className="text-sm text-[#484F58]">No policy rule triggered.</p>
+              {showGoalAligned && (
+                <dl>
+                  <Field label="Goal Aligned" value={event.assessment.is_goal_aligned ? "Yes" : "No"} />
+                </dl>
+              )}
             </div>
           )}
-
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Agent Goal</p>
-            <p className="text-sm text-gray-700 italic">&ldquo;{event.agent_goal}&rdquo;</p>
+          <div className="mt-5 pt-4 border-t border-[#1C2844]">
+            <p className="text-xs text-[#484F58] uppercase tracking-wider mb-1.5">Agent Goal</p>
+            <p className="text-sm text-[#8B949E] italic">&ldquo;{event.agent_goal}&rdquo;</p>
           </div>
-        </div>
+        </Panel>
       </div>
 
       {/* Parameters */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+      <div className="bg-[#0C1220] rounded-xl border border-[#1C2844] p-6">
+        <h2 className="text-xs font-semibold text-[#6E7D91] uppercase tracking-wider mb-3">
           Action Parameters
         </h2>
-        <pre className="bg-gray-50 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-auto max-h-64">
+        <pre className="bg-[#070B14] border border-[#1C2844] rounded-lg p-4 text-xs font-mono text-[#8B949E] overflow-auto max-h-64 leading-relaxed">
           {JSON.stringify(event.action.parameters, null, 2)}
         </pre>
       </div>
 
-      {/* Raw Event JSON */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+      {/* Provenance */}
+      {event.provenance.length > 0 && <ProvenancePanel tags={event.provenance} />}
+
+      {/* Threat Intelligence */}
+      <ThreatTaxonomyPanel event={event} />
+
+      {/* Raw Event */}
+      <div className="bg-[#0C1220] rounded-xl border border-[#1C2844] p-6">
+        <h2 className="text-xs font-semibold text-[#6E7D91] uppercase tracking-wider mb-3">
           Raw Event
         </h2>
-        <pre className="bg-gray-50 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-auto max-h-96">
+        <pre className="bg-[#070B14] border border-[#1C2844] rounded-lg p-4 text-xs font-mono text-[#484F58] overflow-auto max-h-96 leading-relaxed">
           {JSON.stringify(event, null, 2)}
         </pre>
       </div>

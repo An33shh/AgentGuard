@@ -8,6 +8,8 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  Area,
+  AreaChart,
 } from "recharts";
 import type { Event } from "@/types";
 
@@ -29,9 +31,9 @@ function eventsToChartData(events: Event[]): ChartPoint[] {
 }
 
 const DOT_COLORS: Record<string, string> = {
-  block: "#ef4444",
-  review: "#eab308",
-  allow: "#22c55e",
+  block: "#F85149",
+  review: "#D29922",
+  allow: "#3FB950",
 };
 
 interface CustomDotProps {
@@ -42,14 +44,45 @@ interface CustomDotProps {
 
 function CustomDot({ cx = 0, cy = 0, payload }: CustomDotProps) {
   const color = DOT_COLORS[payload?.decision ?? "allow"] ?? "#6b7280";
-  return <circle cx={cx} cy={cy} r={4} fill={color} stroke="white" strokeWidth={1.5} />;
+  const isBlock = payload?.decision === "block";
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={isBlock ? 4 : 3}
+      fill={color}
+      stroke="#0C1220"
+      strokeWidth={1.5}
+      style={isBlock ? { filter: "drop-shadow(0 0 3px rgba(248,81,73,0.7))" } : undefined}
+    />
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function CustomTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const point: ChartPoint = payload[0].payload;
+  const color = DOT_COLORS[point.decision] ?? "#8B949E";
+  return (
+    <div
+      className="rounded-lg px-3 py-2 text-xs shadow-xl"
+      style={{
+        background: "#101828",
+        border: "1px solid #243354",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+      }}
+    >
+      <p style={{ color: "#6E7D91" }} className="mb-1 font-mono">{point.time}</p>
+      <p style={{ color }} className="font-semibold font-mono">
+        {point.risk}% <span style={{ color: "#6E7D91" }}>·</span> {point.decision.toUpperCase()}
+      </p>
+    </div>
+  );
 }
 
 interface RiskSparklineChartProps {
   events: Event[];
-  /** Risk threshold (0–100). Actions at or above this are blocked. Default: 75 */
   riskThreshold?: number;
-  /** Review threshold (0–100). Actions at or above this are flagged. Default: 60 */
   reviewThreshold?: number;
 }
 
@@ -61,50 +94,73 @@ export function RiskSparklineChart({
   const data = eventsToChartData(events);
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-base font-semibold text-gray-900">Risk Score Timeline</h3>
-        <div className="flex items-center gap-4 text-xs text-gray-500">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Blocked</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" />Review</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />Allowed</span>
+    <div
+      className="rounded-xl p-5 h-full"
+      style={{
+        background: "linear-gradient(135deg, #101828 0%, #0C1220 100%)",
+        border: "1px solid #1C2844",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+      }}
+    >
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h3 className="text-sm font-medium text-[#E6EDF3]">Risk Score Timeline</h3>
+          <p className="text-xs mt-0.5" style={{ color: "#484F58" }}>
+            {data.length} events monitored
+          </p>
+        </div>
+        <div className="flex items-center gap-4 text-xs" style={{ color: "#484F58" }}>
+          {[
+            { color: "#F85149", label: "Block" },
+            { color: "#D29922", label: "Review" },
+            { color: "#3FB950", label: "Allow" },
+          ].map(({ color, label }) => (
+            <span key={label} className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: color }} />
+              {label}
+            </span>
+          ))}
         </div>
       </div>
       {data.length === 0 ? (
-        <div className="h-48 flex items-center justify-center text-sm text-gray-400">
-          No data yet. Run the demo to see events.
+        <div className="h-48 flex items-center justify-center text-sm" style={{ color: "#484F58" }}>
+          No data yet — run the demo to see events.
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+          <AreaChart data={data} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+            <defs>
+              <linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#6366F1" stopOpacity={0.15} />
+                <stop offset="95%" stopColor="#6366F1" stopOpacity={0} />
+              </linearGradient>
+            </defs>
             <XAxis
               dataKey="time"
-              tick={{ fontSize: 11, fill: "#9ca3af" }}
+              tick={{ fontSize: 11, fill: "#484F58", fontFamily: "var(--font-mono)" }}
               axisLine={false}
               tickLine={false}
             />
             <YAxis
               domain={[0, 100]}
-              tick={{ fontSize: 11, fill: "#9ca3af" }}
+              tick={{ fontSize: 11, fill: "#484F58", fontFamily: "var(--font-mono)" }}
               axisLine={false}
               tickLine={false}
               tickFormatter={(v) => `${v}%`}
             />
-            <Tooltip
-              formatter={(value) => [`${value}%`, "Risk"]}
-              contentStyle={{ fontSize: 12, borderRadius: 8 }}
-            />
-            <ReferenceLine y={riskThreshold} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1} />
-            <ReferenceLine y={reviewThreshold} stroke="#eab308" strokeDasharray="4 2" strokeWidth={1} />
-            <Line
+            <Tooltip content={<CustomTooltip />} />
+            <ReferenceLine y={riskThreshold} stroke="#F85149" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={0.4} />
+            <ReferenceLine y={reviewThreshold} stroke="#D29922" strokeDasharray="3 3" strokeWidth={1} strokeOpacity={0.4} />
+            <Area
               type="monotone"
               dataKey="risk"
-              stroke="#6366f1"
-              strokeWidth={2}
+              stroke="#6366F1"
+              strokeWidth={1.5}
+              fill="url(#riskGradient)"
               dot={<CustomDot />}
-              activeDot={{ r: 6 }}
+              activeDot={{ r: 5, fill: "#6366F1", stroke: "#0C1220", strokeWidth: 2 }}
             />
-          </LineChart>
+          </AreaChart>
         </ResponsiveContainer>
       )}
     </div>

@@ -1,26 +1,106 @@
 @import "tailwindcss";
 
+/* ─── Design tokens ─────────────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Surfaces — deep navy, not neutral black */
+  --base:         #070B14;
+  --sidebar:      #060910;
+  --surface:      #0C1220;
+  --surface-2:    #101828;
+  --surface-3:    #141F33;
+  --hover:        #18253E;
+
+  /* Borders */
+  --border:       #1C2844;
+  --border-2:     #243354;
+
+  /* Text */
+  --text-1: #E6EDF3;
+  --text-2: #8B949E;
+  --text-3: #484F58;
+
+  /* Brand */
+  --accent:       #6366F1;
+  --accent-glow:  rgba(99, 102, 241, 0.35);
+
+  /* Status */
+  --red:    #F85149;
+  --yellow: #D29922;
+  --green:  #3FB950;
+  --blue:   #58A6FF;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+/* ─── Base ──────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+html { color-scheme: dark; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--base);
+  color: var(--text-1);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
 }
+
+/* Monospace for numbers and code */
+.font-mono, code, pre, .tabular-nums {
+  font-family: var(--font-mono), ui-monospace, "SFMono-Regular", "Menlo", monospace;
+}
+
+/* Subtle dot-grid texture on the page background */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+}
+
+/* Faint blue radial glow from top — gives depth to pages */
+body::after {
+  content: "";
+  position: fixed;
+  top: -200px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 900px;
+  height: 500px;
+  background: radial-gradient(ellipse at center, rgba(99,102,241,0.06) 0%, transparent 70%);
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2E4166; }
+
+/* ─── Selection ─────────────────────────────────────────────────────────── */
+::selection { background: rgba(99, 102, 241, 0.25); }
+
+/* ─── Utility classes ───────────────────────────────────────────────────── */
+
+/* Card surface — the fundamental card primitive */
+.card {
+  background: linear-gradient(135deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+/* Status glow ring used on indicators */
+.glow-red    { box-shadow: 0 0 8px rgba(248, 81, 73, 0.4);  }
+.glow-green  { box-shadow: 0 0 8px rgba(63, 185, 80, 0.4);  }
+.glow-yellow { box-shadow: 0 0 8px rgba(210, 153, 34, 0.4); }
+.glow-accent { box-shadow: 0 0 12px var(--accent-glow);      }
+
+/* Pulse animation for live indicators */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+.pulse { animation: pulse-dot 2s ease-in-out infinite; }

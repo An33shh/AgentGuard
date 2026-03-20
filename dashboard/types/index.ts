@@ -1,5 +1,19 @@
 // TypeScript types mirroring Python AgentGuard models
 
+export type ProvenanceSourceType =
+  | "user_instruction"
+  | "tool_output"
+  | "external_data"
+  | "agent_generated"
+  | "system";
+
+export interface ProvenanceTag {
+  source_type: ProvenanceSourceType;
+  label: string;
+  value?: string;
+  inherited_from?: string | null;
+}
+
 export type ActionType =
   | "tool_call"
   | "shell_command"
@@ -23,6 +37,13 @@ export interface Action {
   timestamp: string;
 }
 
+export interface AttackTaxonomyAnnotation {
+  attack_pattern: string;
+  mitre_atlas_ids: string[];
+  owasp_categories: string[];
+  confidence: number;
+}
+
 export interface RiskAssessment {
   risk_score: number;
   reason: string;
@@ -30,6 +51,7 @@ export interface RiskAssessment {
   is_goal_aligned: boolean;
   analyzer_model: string;
   latency_ms: number;
+  attack_taxonomy: AttackTaxonomyAnnotation | null;
 }
 
 export interface PolicyViolation {
@@ -37,6 +59,8 @@ export interface PolicyViolation {
   rule_type: string;
   detail: string;
   decision: Decision;
+  mitre_atlas_ids: string[];
+  owasp_categories: string[];
 }
 
 export interface Event {
@@ -48,7 +72,7 @@ export interface Event {
   decision: Decision;
   policy_violation: PolicyViolation | null;
   timestamp: string;
-  provenance: Record<string, unknown>;
+  provenance: ProvenanceTag[];
   framework: string;
 }
 
@@ -87,6 +111,57 @@ export interface PolicyConfig {
     max_actions: number;
     max_blocked: number;
   };
+}
+
+export interface AgentProfile {
+  agent_id: string;
+  display_name: string;  // AI-generated concise name (e.g. "README Analyzer")
+  agent_goal: string;    // Raw goal string (full context, used in detail views)
+  is_registered: boolean;
+  framework: string;
+  first_seen: string;
+  last_seen: string;
+  total_sessions: number;
+  total_events: number;
+  blocked_events: number;
+  reviewed_events: number;
+  allowed_events: number;
+  avg_risk_score: number;
+  max_risk_score: number;
+  attack_patterns: string[];
+  tools_used: string[];
+  risk_trend: number[];
+}
+
+export interface GraphNode {
+  id: string;
+  type: "agent" | "session" | "tool" | "pattern";
+  label: string;
+  // agent
+  agent_id?: string;
+  is_registered?: boolean;
+  total_events?: number;
+  avg_risk?: number;
+  // session
+  session_id?: string;
+  timestamp?: string;
+  // tool
+  decision?: string;
+  // pattern
+  indicator?: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  type: "had_session" | "used_tool" | "exhibited_pattern";
+  decision?: string;
+  risk_score?: number;
+}
+
+export interface AgentGraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
 }
 
 export function getRiskLevel(score: number): RiskLevel {

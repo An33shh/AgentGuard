@@ -1,6 +1,6 @@
 // Typed API client for AgentGuard FastAPI backend
 
-import type { Decision, Event, PolicyConfig, Stats, TimelineSummary } from "@/types";
+import type { AgentGraphData, AgentProfile, Decision, Event, PolicyConfig, Stats, TimelineSummary } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -54,6 +54,16 @@ export async function getEvent(eventId: string): Promise<Event> {
   return fetchAPI<Event>(`/api/v1/events/${eventId}`);
 }
 
+export async function searchEvents(
+  query: string,
+  limit = 20
+): Promise<Event[]> {
+  return fetchAPI<Event[]>("/api/v1/events/search", {
+    method: "POST",
+    body: JSON.stringify({ query, limit }),
+  });
+}
+
 // ── Timeline ───────────────────────────────────────────
 
 export async function getTimeline(sessionId: string): Promise<Event[]> {
@@ -91,10 +101,35 @@ export async function validatePolicy(yaml: string): Promise<{ valid: boolean; [k
   });
 }
 
+export async function getRawPolicy(): Promise<{ yaml: string; path: string }> {
+  return fetchAPI<{ yaml: string; path: string }>("/api/v1/policies/raw");
+}
+
+export async function savePolicy(yaml: string): Promise<{ saved: boolean; policy_name: string }> {
+  return fetchAPI<{ saved: boolean; policy_name: string }>("/api/v1/policies/save", {
+    method: "POST",
+    body: JSON.stringify({ yaml }),
+  });
+}
+
 export async function reloadPolicy(): Promise<{ reloaded: boolean; policy_name: string }> {
   return fetchAPI<{ reloaded: boolean; policy_name: string }>("/api/v1/policies/reload", {
     method: "POST",
   });
+}
+
+// ── Agents ─────────────────────────────────────────────
+
+export async function getAgents(): Promise<{ agents: AgentProfile[]; total: number }> {
+  return fetchAPI<{ agents: AgentProfile[]; total: number }>("/api/v1/agents");
+}
+
+export async function getAgent(agentId: string): Promise<AgentProfile> {
+  return fetchAPI<AgentProfile>(`/api/v1/agents/${encodeURIComponent(agentId)}`);
+}
+
+export async function getAgentGraph(agentId: string): Promise<AgentGraphData> {
+  return fetchAPI<AgentGraphData>(`/api/v1/agents/${encodeURIComponent(agentId)}/graph`);
 }
 
 // ── Health ─────────────────────────────────────────────
