@@ -8,7 +8,7 @@ import structlog
 
 from agentguard.adapters.base import AgentAdapter
 from agentguard.core.exceptions import BlockedByAgentGuard
-from agentguard.core.models import Decision
+from agentguard.core.models import Decision, ProvenanceSourceType, ProvenanceTag
 
 if TYPE_CHECKING:
     from agentguard.interceptor.interceptor import Interceptor
@@ -58,7 +58,12 @@ class LangGraphAdapter(AgentAdapter):
             raw_payload=raw_payload,
             agent_goal=self._agent_goal,
             session_id=self._session_id,
-            provenance={"framework": "langgraph"},
+            provenance_tags=[
+                ProvenanceTag(
+                    source_type=ProvenanceSourceType.SYSTEM,
+                    label="langgraph_middleware",
+                )
+            ],
             framework="langgraph",
         )
         if decision == Decision.BLOCK:
@@ -146,13 +151,15 @@ class LangGraphAdapter(AgentAdapter):
                         tools_wrapped=patched,
                     )
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "langgraph_wrap_error",
                 error=str(exc),
+                tools_patched_before_error=patched,
                 hint="Use wrap_tool() on individual tools for guaranteed coverage.",
             )
 
         if patched == 0:
+            # Do NOT mark the graph as guarded — no tools were intercepted.
             logger.warning(
                 "langgraph_no_tool_nodes_found",
                 hint=(
@@ -160,6 +167,7 @@ class LangGraphAdapter(AgentAdapter):
                     "Wrap individual tools with wrap_tool() before building the graph."
                 ),
             )
+            return compiled_graph
 
         compiled_graph._agentguard = self
         return compiled_graph

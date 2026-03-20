@@ -176,7 +176,8 @@ async def run_demo() -> None:
     print_header()
 
     guard = SecureAgent.from_env(
-        goal="Demo session",  # will be overridden per scenario
+        goal="OpenClaw Attack Simulation",
+        agent_id="openclaw-demo-agent",   # single identity across all scenarios
         framework="demo",
         policy_path="policies/default.yaml",
         session_id="openclaw-demo-2026",

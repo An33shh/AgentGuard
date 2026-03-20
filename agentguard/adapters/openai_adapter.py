@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from agentguard.core.exceptions import BlockedByAgentGuard
-from agentguard.core.models import Decision
+from agentguard.core.models import Decision, ProvenanceSourceType, ProvenanceTag
 
 if TYPE_CHECKING:
     from agentguard.interceptor.interceptor import Interceptor
@@ -76,7 +76,13 @@ class AgentGuardOpenAIHooks(_RunHooksBase):  # type: ignore[misc]
             raw_payload=raw_payload,
             agent_goal=self._agent_goal,
             session_id=self._session_id,
-            provenance={"framework": "openai", "agent": str(agent)},
+            provenance_tags=[
+                ProvenanceTag(
+                    source_type=ProvenanceSourceType.SYSTEM,
+                    label="openai_hooks",
+                    value=str(agent)[:80],
+                )
+            ],
             framework="openai",
         )
 

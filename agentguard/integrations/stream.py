@@ -1,8 +1,8 @@
-"""Redis Streams transport layer between AgentGuard and Rowboat sidecar.
+"""Redis Streams transport layer for async enrichment.
 
 AgentGuard publishes BLOCK/REVIEW events to 'agentguard:events' stream.
-Rowboat (or any consumer) reads from that stream, processes async, and
-writes results back to 'agentguard:insights' stream.
+The enrichment worker reads from that stream, runs Claude security triage,
+and writes results to 'agentguard:insights' stream.
 
 The Interceptor XADD costs ~0.1ms — zero hot-path impact.
 """
@@ -20,7 +20,7 @@ logger = structlog.get_logger(__name__)
 
 EVENTS_STREAM = "agentguard:events"
 INSIGHTS_STREAM = "agentguard:insights"
-CONSUMER_GROUP = "rowboat-workers"
+CONSUMER_GROUP = "agentguard-enrichment"
 STREAM_MAXLEN = 10_000  # cap stream size to avoid unbounded growth
 
 
@@ -53,7 +53,7 @@ class RedisStreamPublisher:
         await client.xadd(EVENTS_STREAM, event_data, maxlen=STREAM_MAXLEN, approximate=True)
 
     async def publish_insight(self, insight_data: dict[str, str]) -> None:
-        """XADD to agentguard:insights stream (Rowboat → AgentGuard direction)."""
+        """XADD to agentguard:insights stream (enrichment worker → AgentGuard direction)."""
         client = await self._get_client()
         await client.xadd(INSIGHTS_STREAM, insight_data, maxlen=STREAM_MAXLEN, approximate=True)
 
@@ -66,14 +66,14 @@ class RedisStreamConsumer:
     """
     Consumes events from agentguard:events and invokes a handler.
 
-    Designed to run in the Rowboat sidecar process. Uses consumer groups
+    Designed to run in the enrichment sidecar process. Uses consumer groups
     for at-least-once delivery and XACK after successful processing.
     """
 
     def __init__(
         self,
         redis_url: str | None = None,
-        consumer_name: str = "rowboat-1",
+        consumer_name: str = "enrichment-1",
     ) -> None:
         self._url = redis_url or os.getenv("REDIS_URL", "")
         self._consumer_name = consumer_name

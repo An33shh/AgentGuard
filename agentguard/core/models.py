@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -21,10 +23,46 @@ class ActionType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ProvenanceSourceType(str, Enum):
+    USER_INSTRUCTION = "user_instruction"  # Direct user input
+    TOOL_OUTPUT      = "tool_output"       # Result from a previous tool call
+    EXTERNAL_DATA    = "external_data"     # Web page, API response, file content
+    AGENT_GENERATED  = "agent_generated"   # LLM reasoning / chain-of-thought
+    SYSTEM           = "system"            # AgentGuard / framework internal
+
+
+class ProvenanceTag(BaseModel):
+    """
+    A lineage tag that records the data source driving an agent action.
+
+    Addresses MITRE ATLAS AML.T0054 (Prompt Injection via Tool Outputs):
+    when an agent takes an action after reading external content, the
+    ProvenanceTag makes that dependency explicit and enforceable.
+    """
+    source_type: ProvenanceSourceType
+    label: str                          # Human-readable description, e.g. "GitHub issue body"
+    value: str = ""                     # Short snippet/identifier — NOT full content
+    inherited_from: str | None = None   # event_id this tag was propagated from
+
+
 class Decision(str, Enum):
     ALLOW = "allow"
     BLOCK = "block"
     REVIEW = "review"
+
+
+def derive_agent_id(agent_goal: str, framework: str = "unknown") -> str:
+    """
+    Derive a stable, human-readable agent ID from goal + framework.
+
+    Format: <goal-slug>-<6-char-hash>
+    Example: "summarize-readme-a3f9c1"
+
+    Used when no explicit agent_id is provided (unregistered agents).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", agent_goal.lower().strip())[:30].strip("-")
+    hash_suffix = hashlib.md5(f"{framework}:{agent_goal}".encode()).hexdigest()[:6]
+    return f"{slug}-{hash_suffix}"
 
 
 class Action(BaseModel):
@@ -38,6 +76,20 @@ class Action(BaseModel):
     model_config = {"use_enum_values": False}
 
 
+class AttackTaxonomyAnnotation(BaseModel):
+    """
+    Threat taxonomy annotation populated from enrichment attack_pattern.
+
+    Attached to RiskAssessment after async enrichment completes (fire-and-forget).
+    Stores MITRE ATLAS technique IDs and OWASP Agentic AI categories as raw strings
+    for trivial JSON serialization and API consumption.
+    """
+    attack_pattern: str                    # raw enrichment value, e.g. "credential_exfiltration"
+    mitre_atlas_ids: list[str]             # e.g. ["AML.T0058", "AML.T0048"]
+    owasp_categories: list[str]            # e.g. ["AA03", "AA06"]
+    confidence: float = 0.0
+
+
 class RiskAssessment(BaseModel):
     risk_score: float = Field(ge=0.0, le=1.0)
     reason: str
@@ -45,6 +97,7 @@ class RiskAssessment(BaseModel):
     is_goal_aligned: bool = True
     analyzer_model: str = "unknown"
     latency_ms: float = 0.0
+    attack_taxonomy: AttackTaxonomyAnnotation | None = None
 
     @field_validator("risk_score")
     @classmethod
@@ -68,19 +121,50 @@ class PolicyViolation(BaseModel):
     rule_type: str
     detail: str
     decision: Decision
+    mitre_atlas_ids: list[str] = Field(default_factory=list)
+    owasp_categories: list[str] = Field(default_factory=list)
 
 
 class Event(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
+    agent_id: str = ""            # explicit registered ID or derived slug-hash
+    agent_is_registered: bool = False   # True only when caller passes explicit agent_id
     agent_goal: str
     action: Action
     assessment: RiskAssessment
     decision: Decision
     policy_violation: PolicyViolation | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    provenance: dict[str, Any] = Field(default_factory=dict)
+    provenance: list[ProvenanceTag] = Field(default_factory=list)
     framework: str = "unknown"
+
+
+class AgentProfile(BaseModel):
+    """Aggregated profile for a single agent across all sessions."""
+    agent_id: str
+    display_name: str = ""   # AI-generated concise name; falls back to agent_goal in UI
+    agent_goal: str
+    is_registered: bool
+    framework: str
+    first_seen: datetime
+    last_seen: datetime
+    total_sessions: int
+    total_events: int
+    blocked_events: int
+    reviewed_events: int
+    allowed_events: int
+    avg_risk_score: float
+    max_risk_score: float
+    attack_patterns: list[str]
+    tools_used: list[str]
+    risk_trend: list[float]         # risk scores ordered by time (last 20)
+
+
+class AgentGraphData(BaseModel):
+    """Graph nodes and edges for the knowledge graph visualization."""
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, Any]]
 
 
 class TimelineSummary(BaseModel):
