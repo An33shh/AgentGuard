@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 
 from agentguard.core.models import (
-    Action,
-    ActionType,
     Decision,
     ProvenanceSourceType,
     ProvenanceTag,

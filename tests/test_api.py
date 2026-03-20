@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
 
 from agentguard.core.models import Action, ActionType, Decision, Event, RiskAssessment

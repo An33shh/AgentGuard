@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 
-from agentguard.core.models import AgentGraphData, AgentProfile, AttackTaxonomyAnnotation, Decision, Event, TimelineSummary, derive_agent_id
+from agentguard.core.models import AgentGraphData, AgentProfile, AttackTaxonomyAnnotation, Decision, Event, TimelineSummary
 
 logger = structlog.get_logger(__name__)
 

@@ -97,7 +97,7 @@ class RateLimiter:
         if not self._redis_url:
             return None
         try:
-            client = await self._get_redis_client()
+            await self._get_redis_client()  # initialises self._redis_script as side-effect
             script = self._redis_script
             now_ms = int(time.time() * 1000)
             key = f"agentguard:rl:{client_id}"

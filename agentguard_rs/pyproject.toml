@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "agentguard-rs"
+version = "0.1.0"
+description = "Native Rust extension for AgentGuard policy pattern matching"
+requires-python = ">=3.12"
+
+[tool.maturin]
+module-name = "agentguard_rs"
+features = ["pyo3/extension-module"]

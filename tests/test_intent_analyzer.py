@@ -202,7 +202,6 @@ class TestFailClosedTypes:
     @pytest.mark.asyncio
     async def test_hedging_prefers_successful_task_when_both_complete(self) -> None:
         """When both hedged tasks complete, the successful one is used."""
-        import asyncio as _asyncio
         analyzer = make_analyzer()
         analyzer._hedge_after = 0.0  # trigger hedge immediately
 

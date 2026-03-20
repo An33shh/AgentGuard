@@ -37,3 +37,9 @@ Thumbs.db
 
 # Claude Code local data
 .claude/
+
+# Rust build artifacts
+agentguard_rs/target/
+
+# Claude Code planning files
+tasks/

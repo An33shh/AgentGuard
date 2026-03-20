@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agentguard.auth.jwt_utils import auth_enabled, validate_auth_config
-from agentguard.core.errors import AgentGuardHTTPError
 from agentguard.telemetry.logger import configure_logging
 from api.dependencies import check_rate_limit, verify_auth
 from api.middleware.request_id import RequestIDMiddleware

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 from agentguard.core.models import ActionType

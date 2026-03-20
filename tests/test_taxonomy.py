@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from agentguard.taxonomy import (
     ATLAS_TECHNIQUES,
@@ -11,7 +10,7 @@ from agentguard.taxonomy import (
     lookup_by_attack_pattern,
     lookup_by_rule_type,
 )
-from agentguard.taxonomy.mappings import ATTACK_PATTERN_TO_TAXONOMY, TaxonomyMapping
+from agentguard.taxonomy.mappings import ATTACK_PATTERN_TO_TAXONOMY
 
 
 class TestAtlasTaxonomy:

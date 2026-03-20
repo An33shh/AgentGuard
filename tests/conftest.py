@@ -6,8 +6,7 @@ import os
 
 import pytest
 
-from agentguard.analyzer.intent_analyzer import IntentAnalyzer
-from agentguard.core.models import Action, ActionType, Decision, RiskAssessment
+from agentguard.core.models import Action, RiskAssessment
 from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine

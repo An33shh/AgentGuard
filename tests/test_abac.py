@@ -148,7 +148,6 @@ class TestSessionDemotion:
     @pytest.mark.asyncio
     async def test_demoted_session_blocks_medium_risk_action(self) -> None:
         """After demotion, a score of 0.45 should BLOCK (threshold dropped to 0.40)."""
-        interceptor = _make_interceptor(self._demoting_config(), default_score=0.45)
 
         # Trigger demotion by racking up 2 blocks via deny_tools
         config_with_block = PolicyConfig(

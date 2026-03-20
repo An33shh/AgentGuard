@@ -43,7 +43,7 @@ class AnthropicBackend(AnalyzerBackend):
     ) -> RiskAssessment:
         response = await self._client.messages.create(
             model=self._model,
-            max_tokens=256,
+            max_tokens=512,
             system=SYSTEM_PROMPT,
             tools=[_TOOL],
             tool_choice={"type": "tool", "name": "assess_risk"},

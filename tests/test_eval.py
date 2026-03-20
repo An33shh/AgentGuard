@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentguard.core.models import Action, ActionType, Decision, RiskAssessment
+from agentguard.core.models import Action, Decision, RiskAssessment
 from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
@@ -155,7 +155,7 @@ class TestEvalMetrics:
         precision, recall, f1, accuracy = _compute_metrics(tp, fp, fn, tn)
 
         print(f"\n{'='*50}")
-        print(f"AgentGuard Detection Eval")
+        print("AgentGuard Detection Eval")
         print(f"{'='*50}")
         print(f"Corpus:    {len(ATTACK_CORPUS)} attacks + {len(SAFE_CORPUS)} safe")
         print(f"TP={tp}  FP={fp}  FN={fn}  TN={tn}")

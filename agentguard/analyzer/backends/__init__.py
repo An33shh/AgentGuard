@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import warnings
 
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.backends.anthropic_backend import AnthropicBackend
@@ -55,6 +57,8 @@ def create_backend(
     resolved_model = model or os.getenv("AGENTGUARD_MODEL") or _DEFAULT_MODELS.get(provider, "")
     resolved_base_url = base_url or os.getenv("AGENTGUARD_BASE_URL") or _BASE_URLS.get(provider)
 
+    _warn_if_weak_model(provider, resolved_model)
+
     if provider == "anthropic":
         key = api_key or os.getenv("ANTHROPIC_API_KEY")
         return AnthropicBackend(api_key=key, model=resolved_model)
@@ -67,6 +71,68 @@ def create_backend(
         base_url=resolved_base_url,
         provider_name=provider,
     )
+
+
+# Known-weak model substrings — match wins over the strong-model check below.
+# This prevents "claude-4-haiku" from slipping through a version-number allowlist.
+_WEAK_MODEL_SUBSTRINGS: dict[str, re.Pattern[str]] = {
+    "anthropic": re.compile(r"haiku", re.IGNORECASE),
+    "openai":    re.compile(r"(gpt-3\.5|o-mini|instruct)", re.IGNORECASE),
+    "groq":      re.compile(r"llama.*[38]b|gemma|whisper|guard", re.IGNORECASE),
+}
+
+# Strong-model patterns — only consulted when no weak substring matched.
+# Conservative: unknown models are not warned about (avoid false positives for new releases).
+_STRONG_MODEL_PATTERNS: dict[str, re.Pattern[str]] = {
+    # Sonnet (any version), Opus (any version)
+    "anthropic": re.compile(r"(sonnet|opus)", re.IGNORECASE),
+    # GPT-4 family: gpt-4, gpt-4o, gpt-4-turbo
+    "openai":    re.compile(r"gpt-4", re.IGNORECASE),
+    # Large open-weight models (70B+)
+    "groq":      re.compile(r"(70b|405b)", re.IGNORECASE),
+    "together":  re.compile(r"(70b|405b)", re.IGNORECASE),
+}
+
+# Local providers where model quality is always unknown
+_LOCAL_PROVIDERS = frozenset({"ollama", "lm_studio"})
+
+_RECOMMEND_MSG = (
+    "Recommended: claude-sonnet-4-6 (Anthropic) or gpt-4o (OpenAI). "
+    "Weaker models may miss sophisticated prompt injection and goal hijacking attacks."
+)
+
+
+def _warn_if_weak_model(provider: str, model: str) -> None:
+    """Emit a UserWarning when the configured model may degrade security quality."""
+    if provider in _LOCAL_PROVIDERS:
+        warnings.warn(
+            f"AgentGuard: local model '{model}' via {provider}. "
+            f"Security quality depends entirely on model capability. {_RECOMMEND_MSG}",
+            UserWarning,
+            stacklevel=4,
+        )
+        return
+
+    # Explicit weak check takes priority — catches "claude-4-haiku", "gpt-4o-mini", etc.
+    weak_pattern = _WEAK_MODEL_SUBSTRINGS.get(provider)
+    if weak_pattern is not None and weak_pattern.search(model):
+        warnings.warn(
+            f"AgentGuard: model '{model}' ({provider}) is not recommended for security analysis. "
+            f"{_RECOMMEND_MSG}",
+            UserWarning,
+            stacklevel=4,
+        )
+        return
+
+    # Unknown models that don't match any strong pattern — warn conservatively
+    strong_pattern = _STRONG_MODEL_PATTERNS.get(provider)
+    if strong_pattern is not None and not strong_pattern.search(model):
+        warnings.warn(
+            f"AgentGuard: model '{model}' ({provider}) may not provide reliable adversarial "
+            f"reasoning for security analysis. {_RECOMMEND_MSG}",
+            UserWarning,
+            stacklevel=4,
+        )
 
 
 def _auto_detect_provider() -> str:

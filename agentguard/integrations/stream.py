@@ -10,7 +10,6 @@ The Interceptor XADD costs ~0.1ms — zero hot-path impact.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from typing import Any
 

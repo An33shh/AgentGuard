@@ -21,12 +21,12 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
-from typing import Any
 
 import structlog
 
 from agentguard.core.models import Action, ActionType, Decision, PolicyViolation, ProvenanceTag
 from agentguard.interceptor.action_types import extract_file_path, extract_url_domain
+from agentguard.policy._native import RUST_AVAILABLE, build_native_matcher
 from agentguard.policy.schema import PolicyConfig, RuleAnnotation
 from agentguard.taxonomy import lookup_by_rule_type
 
@@ -174,6 +174,19 @@ class PolicyEngine:
         self._provenance_patterns: list[re.Pattern[str]] = [
             re.compile(fnmatch.translate(p)) for p in (self._config.deny_provenance_sources or [])
         ]
+        # Optional Rust fast-path: replaces Python regex loops when the native extension
+        # is compiled and installed. Falls back to Python silently when unavailable.
+        self._native = build_native_matcher(
+            path_patterns=list(self._config.deny_path_patterns or []),
+            domain_patterns=list(self._config.deny_domains or []),
+            deny_tools=[t.lower() for t in (self._config.deny_tools or [])],
+            allow_tools=[t.lower() for t in (self._config.allow_tools or [])],
+            review_tools=[t.lower() for t in (self._config.review_tools or [])],
+            unregistered_tools=[t.lower() for t in (self._config.deny_unregistered_tools or [])],
+            provenance_patterns=list(self._config.deny_provenance_sources or []),
+        )
+        if RUST_AVAILABLE:
+            logger.debug("policy_engine_native_matcher_active")
 
     @classmethod
     def from_yaml(cls, path: str) -> "PolicyEngine":
@@ -205,17 +218,24 @@ class PolicyEngine:
         tool_lower = action.tool_name.lower()
 
         # Rule 1: deny_tools
-        for pat in self._deny_tool_patterns:
-            if pat.match(tool_lower):
-                return Decision.BLOCK, _make_violation(
-                    "deny_tools", "tool_blacklist",
-                    f"Tool '{action.tool_name}' is in deny list",
-                    Decision.BLOCK, ra,
-                )
+        if self._native:
+            deny_hit = self._native.match_deny_tool(tool_lower)
+        else:
+            deny_hit = any(p.match(tool_lower) for p in self._deny_tool_patterns)
+        if deny_hit:
+            return Decision.BLOCK, _make_violation(
+                "deny_tools", "tool_blacklist",
+                f"Tool '{action.tool_name}' is in deny list",
+                Decision.BLOCK, ra,
+            )
 
         # Rule 2: allow_tools — if configured, tool MUST be in the allowlist
         if self._allow_tool_patterns:
-            if not any(p.match(tool_lower) for p in self._allow_tool_patterns):
+            if self._native:
+                in_allowlist = self._native.match_allow_tool(tool_lower)
+            else:
+                in_allowlist = any(p.match(tool_lower) for p in self._allow_tool_patterns)
+            if not in_allowlist:
                 return Decision.BLOCK, _make_violation(
                     "allow_tools", "tool_allowlist",
                     f"Tool '{action.tool_name}' is not in the allow list",
@@ -226,7 +246,15 @@ class PolicyEngine:
         if action.type in (ActionType.FILE_READ, ActionType.FILE_WRITE, ActionType.CREDENTIAL_ACCESS):
             path = extract_file_path(action.parameters)
             if path and self._path_patterns:
-                if len(path) <= _MAX_PATH_LEN:
+                if self._native:
+                    matched_pattern = self._native.match_path(path)
+                    if matched_pattern:
+                        return Decision.BLOCK, _make_violation(
+                            "deny_path_patterns", "path_blacklist",
+                            f"Path '{path}' matches deny pattern '{matched_pattern}'",
+                            Decision.BLOCK, ra,
+                        )
+                elif self._path_patterns and len(path) <= _MAX_PATH_LEN:
                     expanded = os.path.expanduser(path).replace("\\", "/").rstrip("/")
                     for compiled, raw_pattern in self._path_patterns:
                         if compiled.fullmatch(expanded):
@@ -249,29 +277,41 @@ class PolicyEngine:
         if action.type == ActionType.HTTP_REQUEST and self._domain_patterns:
             domain = extract_url_domain(action.parameters)
             if domain:
-                for suffix, pat in self._domain_patterns:
-                    if suffix:  # *.xxx style: fast suffix check
-                        if domain == suffix[1:] or domain.endswith(suffix):
-                            return Decision.BLOCK, _make_violation(
-                                "deny_domains", "domain_blacklist",
-                                f"Domain '{domain}' matches deny pattern '*.{suffix[1:]}'",
-                                Decision.BLOCK, ra,
-                            )
-                    elif pat and pat.match(domain):  # fnmatch pattern (exact or wildcard)
+                if self._native:
+                    matched_domain_pat = self._native.match_domain(domain)
+                    if matched_domain_pat:
                         return Decision.BLOCK, _make_violation(
                             "deny_domains", "domain_blacklist",
-                            f"Domain '{domain}' matches deny pattern",
+                            f"Domain '{domain}' matches deny pattern '{matched_domain_pat}'",
                             Decision.BLOCK, ra,
                         )
+                else:
+                    for suffix, pat in self._domain_patterns:
+                        if suffix:  # *.xxx style: fast suffix check
+                            if domain == suffix[1:] or domain.endswith(suffix):
+                                return Decision.BLOCK, _make_violation(
+                                    "deny_domains", "domain_blacklist",
+                                    f"Domain '{domain}' matches deny pattern '*.{suffix[1:]}'",
+                                    Decision.BLOCK, ra,
+                                )
+                        elif pat and pat.match(domain):  # fnmatch pattern (exact or wildcard)
+                            return Decision.BLOCK, _make_violation(
+                                "deny_domains", "domain_blacklist",
+                                f"Domain '{domain}' matches deny pattern",
+                                Decision.BLOCK, ra,
+                            )
 
         # Rule 6: review_tools
-        for pat in self._review_tool_patterns:
-            if pat.match(tool_lower):
-                return Decision.REVIEW, _make_violation(
-                    "review_tools", "tool_review",
-                    f"Tool '{action.tool_name}' requires review",
-                    Decision.REVIEW, ra,
-                )
+        if self._native:
+            review_hit = self._native.match_review_tool(tool_lower)
+        else:
+            review_hit = any(p.match(tool_lower) for p in self._review_tool_patterns)
+        if review_hit:
+            return Decision.REVIEW, _make_violation(
+                "review_tools", "tool_review",
+                f"Tool '{action.tool_name}' requires review",
+                Decision.REVIEW, ra,
+            )
 
         return Decision.ALLOW, None
 
@@ -288,14 +328,17 @@ class PolicyEngine:
         if not is_registered and self._unregistered_tool_patterns:
             ra = self._config.rule_annotations or None
             tool_lower = action.tool_name.lower()
-            for pat in self._unregistered_tool_patterns:
-                if pat.match(tool_lower):
-                    return Decision.BLOCK, _make_violation(
-                        "deny_unregistered_tools", "abac",
-                        f"Tool '{action.tool_name}' requires a registered agent identity. "
-                        "Provide an explicit agent_id to use this tool.",
-                        Decision.BLOCK, ra,
-                    )
+            if self._native:
+                hit = self._native.match_unregistered_tool(tool_lower)
+            else:
+                hit = any(p.match(tool_lower) for p in self._unregistered_tool_patterns)
+            if hit:
+                return Decision.BLOCK, _make_violation(
+                    "deny_unregistered_tools", "abac",
+                    f"Tool '{action.tool_name}' requires a registered agent identity. "
+                    "Provide an explicit agent_id to use this tool.",
+                    Decision.BLOCK, ra,
+                )
         return Decision.ALLOW, None
 
     def evaluate_provenance(
@@ -312,13 +355,22 @@ class PolicyEngine:
             return Decision.ALLOW, None
         ra = self._config.rule_annotations or None
         for tag in provenance_tags:
-            for pat in self._provenance_patterns:
-                if pat.match(tag.source_type.value):
+            if self._native:
+                matched = self._native.match_provenance(tag.source_type.value)
+                if matched:
                     return Decision.BLOCK, _make_violation(
                         "deny_provenance_sources", "provenance",
                         f"Action triggered by denied source '{tag.source_type.value}': {tag.label}",
                         Decision.BLOCK, ra,
                     )
+            else:
+                for pat in self._provenance_patterns:
+                    if pat.match(tag.source_type.value):
+                        return Decision.BLOCK, _make_violation(
+                            "deny_provenance_sources", "provenance",
+                            f"Action triggered by denied source '{tag.source_type.value}': {tag.label}",
+                            Decision.BLOCK, ra,
+                        )
         return Decision.ALLOW, None
 
     def effective_thresholds(self, session_blocked: int) -> tuple[float, float]:

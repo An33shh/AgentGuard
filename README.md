@@ -279,6 +279,34 @@ export OPENAI_API_KEY=your-key
 export AGENTGUARD_ANALYZER_MODEL=your-model
 ```
 
+### Model quality and the security guarantee
+
+The intent analyzer is the core of AgentGuard's behavioral detection. Its ability to catch
+prompt injection, goal hijacking, and multi-step attack patterns depends entirely on the
+reasoning quality of the configured model.
+
+**Recommended models** (confirmed reliable for adversarial reasoning):
+
+| Provider  | Recommended                          | Avoid                              |
+|-----------|--------------------------------------|------------------------------------|
+| Anthropic | `claude-sonnet-4-6` (**default**)    | claude-haiku-* (too weak)          |
+| OpenAI    | `gpt-4o`, `gpt-4-turbo`             | gpt-3.5-*, gpt-4o-mini             |
+| Groq      | `llama-3.3-70b-versatile`           | llama-3.2-* (< 70B)               |
+| Local     | —                                    | Any quantized or <70B model        |
+
+AgentGuard defaults to `claude-sonnet-4-6` because it provides the best adversarial reasoning
+in its class. Switching to a weaker model does not just reduce accuracy — it creates a blind
+spot that sophisticated attacks will exploit.
+
+**When using a non-recommended model**, AgentGuard emits a `UserWarning` at startup:
+```
+UserWarning: AgentGuard: model 'llama3.1' (ollama) may not provide reliable adversarial
+reasoning for security analysis. Recommended: claude-sonnet-4-6 (Anthropic) or gpt-4o (OpenAI).
+```
+
+The deterministic policy engine (deny_tools, path patterns, domains) is model-independent and
+always fast. Only the LLM-scored `risk_threshold` gate degrades with weaker models.
+
 ---
 
 ## Policy configuration
