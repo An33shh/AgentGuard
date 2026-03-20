@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
+from collections import OrderedDict
 from typing import Any
 
 import structlog
@@ -11,6 +14,15 @@ import structlog
 from agentguard.core.models import Action, ActionType, RiskAssessment
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.local_classifier import LocalClassifier
+
+_CACHE_MAX_SIZE = 1024
+
+
+def _cache_key(action: Action, agent_goal: str) -> str:
+    """Stable hash key for an (action, goal) pair."""
+    params_str = json.dumps(action.parameters, sort_keys=True, default=str)[:300]
+    raw = f"{action.tool_name}|{action.type.value}|{params_str}|{agent_goal[:100]}"
+    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
 
 logger = structlog.get_logger(__name__)
 
@@ -52,11 +64,12 @@ class IntentAnalyzer:
     def __init__(
         self,
         backend: AnalyzerBackend,
-        hedge_after: float = 3.0,
+        hedge_after: float = 1.0,
     ) -> None:
         self._backend = backend
         self._hedge_after = hedge_after
         self._local = LocalClassifier()
+        self._cache: OrderedDict[str, RiskAssessment] = OrderedDict()
 
     @property
     def provider(self) -> str:
@@ -91,7 +104,15 @@ class IntentAnalyzer:
             )
             return local_result
 
-        # 2. LLM analysis with request hedging
+        # 2. Assessment cache — skip LLM for identical (action, goal) pairs
+        key = _cache_key(action, agent_goal)
+        if key in self._cache:
+            cached = self._cache[key]
+            self._cache.move_to_end(key)
+            log.info("assessment_cache_hit", risk_score=cached.risk_score)
+            return cached
+
+        # 3. LLM analysis with request hedging
         try:
             assessment = await self._hedged_analyze(action, agent_goal, session_context, log)
             latency_ms = (time.monotonic() - t_start) * 1000
@@ -102,6 +123,10 @@ class IntentAnalyzer:
                 risk_level=assessment.risk_level,
                 latency_ms=f"{latency_ms:.0f}ms",
             )
+            # Store in cache — evict oldest entry when full
+            self._cache[key] = assessment
+            if len(self._cache) > _CACHE_MAX_SIZE:
+                self._cache.popitem(last=False)
             return assessment
 
         except asyncio.CancelledError:

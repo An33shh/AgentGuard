@@ -12,7 +12,7 @@ __all__ = ["AnalyzerBackend", "AnthropicBackend", "OpenAICompatBackend", "create
 
 # Default models per provider
 _DEFAULT_MODELS: dict[str, str] = {
-    "anthropic": "claude-sonnet-4-6",
+    "anthropic": "claude-haiku-4-5-20251001",
     "openai": "gpt-4o",
     "ollama": "llama3.1",
     "lm_studio": "local-model",

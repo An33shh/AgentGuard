@@ -111,11 +111,13 @@ class TestInterceptor:
 
     @pytest.mark.asyncio
     async def test_event_logged_to_ledger(self, interceptor: Interceptor, event_ledger) -> None:
+        import asyncio
         await interceptor.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
             agent_goal="Summarize",
             session_id="ledger-test",
         )
+        await asyncio.sleep(0)  # yield so fire-and-forget ledger task completes
         events = await event_ledger.list_events(session_id="ledger-test")
         assert len(events) == 1
 

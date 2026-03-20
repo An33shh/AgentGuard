@@ -103,7 +103,7 @@ class SecureAgent:
             api_key=analyzer_api_key,
             base_url=analyzer_base_url,
         )
-        hedge_after = float(os.getenv("AGENTGUARD_HEDGE_AFTER", "3.0"))
+        hedge_after = float(os.getenv("AGENTGUARD_HEDGE_AFTER", "1.0"))
         analyzer = IntentAnalyzer(backend=backend, hedge_after=hedge_after)
         policy_engine = PolicyEngine.from_yaml(policy_file)
         if ledger is not None:

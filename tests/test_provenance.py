@@ -221,6 +221,7 @@ class TestInterceptorProvenance:
             policy_engine=engine,
             event_ledger=event_ledger,
         )
+        import asyncio
         session = "prov-ledger-test"
         await inter.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
@@ -228,6 +229,7 @@ class TestInterceptorProvenance:
             session_id=session,
             provenance_tags=[make_external_tag()],
         )
+        await asyncio.sleep(0)  # yield so fire-and-forget ledger task completes
         events = await event_ledger.list_events(session_id=session)
         assert len(events) == 1
         assert events[0].policy_violation.rule_name == "deny_provenance_sources"

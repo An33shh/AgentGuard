@@ -136,23 +136,22 @@ async def run_scenario(
         if response.stop_reason != "tool_use":
             break
 
+        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
         tool_results = []
 
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
+        # Analyze all tool calls in parallel — AgentGuard intercepts concurrently
+        async def _intercept_block(block):
             tool_name = block.name
             parameters = dict(block.input)
-
             print(f"  → wants  : {tool_name}({json.dumps(parameters)[:100]})")
-
-            # ── AgentGuard intercepts here ──────────────────────────────────
             decision, event = await guard.intercept(
                 {"tool_name": tool_name, "parameters": parameters}
             )
-            # ───────────────────────────────────────────────────────────────
+            return block, tool_name, parameters, decision, event
 
+        results = await asyncio.gather(*[_intercept_block(b) for b in tool_use_blocks])
+
+        for block, tool_name, parameters, decision, event in results:
             risk_pct = f"{event.assessment.risk_score * 100:.1f}%"
 
             if decision == Decision.BLOCK:

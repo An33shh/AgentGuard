@@ -293,7 +293,7 @@ class Interceptor:
                 provenance=provenance_tags,
                 framework=framework,
             )
-            await self._ledger.append(event)
+            asyncio.create_task(self._ledger.append(event))
             async with self._stats_lock:
                 # Session limit hit: still count both action + blocked.
                 self._session_stats[session_id]["actions"] += 1
@@ -325,7 +325,7 @@ class Interceptor:
                 provenance=provenance_tags,
                 framework=framework,
             )
-            await self._ledger.append(event)
+            asyncio.create_task(self._ledger.append(event))
             async with self._stats_lock:
                 self._session_stats[session_id]["actions"] += 1
                 self._session_stats[session_id]["blocked"] += 1
@@ -357,7 +357,7 @@ class Interceptor:
                 provenance=provenance_tags,
                 framework=framework,
             )
-            await self._ledger.append(event)
+            asyncio.create_task(self._ledger.append(event))
             async with self._stats_lock:
                 self._session_stats[session_id]["blocked"] += 1
             log.warning("action_blocked_provenance", detail=prov_violation.detail)
@@ -416,8 +416,8 @@ class Interceptor:
             framework=framework,
         )
 
-        # 6. Log to ledger
-        await self._ledger.append(event)
+        # 6. Log to ledger — fire-and-forget, off the critical path
+        asyncio.create_task(self._ledger.append(event))
 
         # 7. Async enrichment — fire-and-forget, zero latency impact
         if decision in (Decision.BLOCK, Decision.REVIEW):
