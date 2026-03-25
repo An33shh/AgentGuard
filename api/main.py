@@ -155,6 +155,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "api.main:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
-        port=int(os.getenv("API_PORT", "8000")),
+        port=int(os.getenv("API_PORT", "8747")),
         reload=os.getenv("AGENTGUARD_DEV_RELOAD", "false").lower() == "true",
     )

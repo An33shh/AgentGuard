@@ -81,11 +81,11 @@ def cmd_start(args: argparse.Namespace) -> None:
             pass
 
     host = getattr(args, "host", None) or os.getenv("API_HOST", "0.0.0.0")
-    port = int(getattr(args, "port", None) or os.getenv("API_PORT", "8000"))
+    port = int(getattr(args, "port", None) or os.getenv("API_PORT", "8747"))
     reload = getattr(args, "reload", False)
 
     print(f"Starting AgentGuard API on http://{host}:{port}")
-    print("  Docs: http://localhost:8000/docs")
+    print(f"  Docs: http://localhost:{port}/docs")
     print("  Dashboard: run 'cd dashboard && npm run dev' for the UI\n")
 
     uvicorn.run(
@@ -176,7 +176,7 @@ def cmd_status(_args: argparse.Namespace) -> None:
     import urllib.error
     import json
 
-    base_url = os.getenv("AGENTGUARD_API_URL", "http://localhost:8000")
+    base_url = os.getenv("AGENTGUARD_API_URL", "http://localhost:8747")
 
     def check(path: str, label: str) -> None:
         url = f"{base_url}{path}"

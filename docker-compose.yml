@@ -4,7 +4,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     ports:
-      - "5432:5432"
+      - "5747:5432"
     environment:
       POSTGRES_USER: agentguard
       POSTGRES_PASSWORD: agentguard
@@ -20,7 +20,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6747:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -46,9 +46,9 @@ services:
 
   agentguard-api:
     build: .
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8001
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8747
     ports:
-      - "8001:8001"
+      - "8747:8747"
     env_file:
       - .env.dev
       - path: .env
@@ -70,9 +70,9 @@ services:
       context: ./dashboard
       dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - "3747:3747"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8001
+      NEXT_PUBLIC_API_URL: http://localhost:8747
     depends_on:
       - agentguard-api
 
