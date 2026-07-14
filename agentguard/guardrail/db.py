@@ -9,9 +9,6 @@ so a single DB_URL env var covers both ledgers.
 
 from __future__ import annotations
 
-import json
-import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
@@ -22,7 +19,6 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
-    Text,
     TypeDecorator,
     select,
     func,

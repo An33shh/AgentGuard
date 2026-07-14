@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import uuid
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
 import structlog
-from fastapi import Depends, Request
+from fastapi import Request
 
 from agentguard.proxy.config import ProxyConfig
 from agentguard.proxy.models import ProxyRequestContext
