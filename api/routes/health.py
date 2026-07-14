@@ -113,7 +113,10 @@ def _check_policy() -> dict:
 
 def _check_analyzer() -> dict:
     model = os.getenv("AGENTGUARD_MODEL", "claude-sonnet-4-6")
-    has_key = bool(os.getenv("ANTHROPIC_API_KEY"))
-    if not has_key:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
         return {"status": "degraded", "note": "ANTHROPIC_API_KEY not set"}
+    # Anthropic keys are always sk-ant-* — catch obvious misconfigurations
+    if not api_key.startswith("sk-ant-"):
+        return {"status": "degraded", "note": "ANTHROPIC_API_KEY format invalid (expected sk-ant-*)"}
     return {"status": "healthy", "model": model}

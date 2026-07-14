@@ -133,6 +133,8 @@ class EventRecord(Base):
     attack_taxonomy = Column(_FlexJSON, nullable=True)
 
     provenance = Column(_FlexJSON, nullable=False, default=list)
+    correlation_id = Column(String(64), nullable=False, default="")
+    initiating_principal = Column(String(256), nullable=False, default="")
     created_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -218,6 +220,8 @@ class PostgresEventLedger(EventLedger):
             policy_detail=event.policy_violation.detail if event.policy_violation else None,
             policy_violation=event.policy_violation.model_dump() if event.policy_violation else None,
             provenance=[t.model_dump() for t in event.provenance],
+            correlation_id=event.correlation_id,
+            initiating_principal=event.initiating_principal,
             created_at=event.timestamp,
         )
         async with self._sessionmaker() as session:
@@ -618,5 +622,7 @@ class PostgresEventLedger(EventLedger):
             decision=Decision(record.decision),
             policy_violation=policy_violation,
             provenance=_deserialize_provenance(record.provenance),
+            correlation_id=record.correlation_id or "",
+            initiating_principal=record.initiating_principal or "",
             timestamp=record.created_at,
         )

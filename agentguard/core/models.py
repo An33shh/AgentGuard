@@ -138,6 +138,8 @@ class Event(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     provenance: list[ProvenanceTag] = Field(default_factory=list)
     framework: str = "unknown"
+    correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    initiating_principal: str = ""  # JWT sub or auth header hash — who triggered this session
 
 
 class AgentProfile(BaseModel):

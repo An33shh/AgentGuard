@@ -99,14 +99,12 @@ def extract_request_context(request: Request, config: ProxyConfig) -> ProxyReque
     session_id = request.headers.get(config.session_header, "").strip()
     agent_id = request.headers.get(config.agent_id_header, "").strip()
 
-    # Fallback: derive from auth header hash so sessions are stable per API key
+    # Auth header used for stable session derivation and initiating_principal tracking
+    auth = request.headers.get("Authorization", request.headers.get("x-api-key", ""))
+    auth_hash = hashlib.sha256(auth.encode()).hexdigest()[:16] if auth else ""
+
     if not session_id:
-        auth = request.headers.get("Authorization", request.headers.get("x-api-key", ""))
-        if auth:
-            key_hash = hashlib.sha256(auth.encode()).hexdigest()[:16]
-            session_id = f"proxy-{key_hash}"
-        else:
-            session_id = str(uuid.uuid4())
+        session_id = f"proxy-{auth_hash}" if auth_hash else str(uuid.uuid4())
 
     if not agent_id:
         agent_id = f"proxy-agent-{session_id[:8]}"
@@ -114,8 +112,13 @@ def extract_request_context(request: Request, config: ProxyConfig) -> ProxyReque
     if not goal:
         goal = "LLM API Proxy Agent"
 
+    # X-Request-ID set by RequestIDMiddleware before this runs
+    correlation_id = getattr(getattr(request, "state", None), "request_id", "") or str(uuid.uuid4())
+
     return ProxyRequestContext(
         agent_goal=goal,
         session_id=session_id,
         agent_id=agent_id,
+        correlation_id=correlation_id,
+        initiating_principal=f"proxy-key:{auth_hash}" if auth_hash else "proxy-anonymous",
     )

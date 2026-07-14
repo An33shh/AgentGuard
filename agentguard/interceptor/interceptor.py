@@ -151,6 +151,8 @@ class Interceptor:
         provenance: dict[str, Any] | None = None,
         provenance_tags: list[ProvenanceTag] | None = None,
         framework: str = "unknown",
+        correlation_id: str = "",
+        initiating_principal: str = "",
     ) -> tuple[Decision, Event]:
         """
         Intercept an agent action and return (decision, event).
@@ -181,6 +183,8 @@ class Interceptor:
                 resolved_agent_id=resolved_agent_id,
                 t_start=t_start,
                 log=log,
+                correlation_id=correlation_id,
+                initiating_principal=initiating_principal,
             )
         except Exception as exc:
             # Fail-closed: an unhandled error in the pipeline must never silently
@@ -228,6 +232,8 @@ class Interceptor:
         resolved_agent_id: str,
         t_start: float,
         log: Any,
+        correlation_id: str = "",
+        initiating_principal: str = "",
     ) -> tuple[Decision, Event]:
 
         # 1. Normalize — use framework-appropriate normalizer
@@ -256,13 +262,15 @@ class Interceptor:
                 # Reserve the slot — no concurrent coroutine can also pass this
                 # limit check for the same session until the lock is released.
                 stats["actions"] += 1
-
-        # Compute effective thresholds — tighter if session is demoted
-        risk_threshold, review_threshold = self._policy.effective_thresholds(current_blocked)
-        is_demoted = (
-            self._policy.config.demotion.enabled
-            and current_blocked >= self._policy.config.demotion.trigger_blocked_count
-        )
+            # Compute effective thresholds inside the lock so current_blocked
+            # is consistent with the thresholds used for this request.
+            # Moving this outside the lock would create a TOCTOU window where
+            # a concurrent request increments blocked before we apply demotion.
+            risk_threshold, review_threshold = self._policy.effective_thresholds(current_blocked)
+            is_demoted = (
+                self._policy.config.demotion.enabled
+                and current_blocked >= self._policy.config.demotion.trigger_blocked_count
+            )
         if is_demoted:
             log.warning(
                 "session_demoted",
@@ -414,6 +422,8 @@ class Interceptor:
             policy_violation=violation,
             provenance=provenance_tags,
             framework=framework,
+            correlation_id=correlation_id or str(uuid.uuid4()),
+            initiating_principal=initiating_principal,
         )
 
         # 6. Log to ledger — fire-and-forget, off the critical path
