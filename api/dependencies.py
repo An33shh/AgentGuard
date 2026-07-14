@@ -147,6 +147,29 @@ InterceptorDep = Annotated[Interceptor, Depends(get_interceptor)]
 # Singleton accessors for health checks (non-dependency-injection callers)
 # ---------------------------------------------------------------------------
 
+@lru_cache
+def get_guardrail_ledger():
+    """Get the GuardrailLedger singleton — persistent when DB URL is configured."""
+    db_url = os.getenv("AGENTGUARD_GUARDRAIL_DB_URL") or os.getenv("DATABASE_URL", "")
+    if db_url:
+        from agentguard.guardrail.db import PostgresGuardrailLedger
+        return PostgresGuardrailLedger(db_url)
+    from agentguard.guardrail.ledger import InMemoryGuardrailLedger
+    return InMemoryGuardrailLedger()
+
+
+@lru_cache
+def get_guardrail():
+    """Get the global PromptGuardrail singleton."""
+    from agentguard.guardrail import PromptGuardrail
+    mode = os.getenv("AGENTGUARD_GUARDRAIL_MODE", "observe")
+    deep = os.getenv("AGENTGUARD_GUARDRAIL_DEEP", "false").lower() == "true"
+    return PromptGuardrail.from_env(mode=mode, deep_analysis=deep, ledger=get_guardrail_ledger())
+
+
+GuardrailDep = Annotated[Any, Depends(get_guardrail)]
+
+
 def get_ledger_instance() -> EventLedger:
     """Return the cached ledger singleton (for health checks)."""
     return get_ledger()

@@ -73,6 +73,18 @@ def get_proxy_interceptor() -> Any:
 
 
 @lru_cache(maxsize=1)
+def get_proxy_guardrail_ledger() -> Any:
+    """Persistent GuardrailLedger for the proxy — shares DB with main API when configured."""
+    import os
+    db_url = os.getenv("AGENTGUARD_GUARDRAIL_DB_URL") or os.getenv("DATABASE_URL", "")
+    if db_url:
+        from agentguard.guardrail.db import PostgresGuardrailLedger
+        return PostgresGuardrailLedger(db_url)
+    from agentguard.guardrail.ledger import InMemoryGuardrailLedger
+    return InMemoryGuardrailLedger()
+
+
+@lru_cache(maxsize=1)
 def get_proxy_guardrail() -> Any | None:
     """Build and cache the PromptGuardrail for proxy use, or None if not configured."""
     config = get_proxy_config()
@@ -82,6 +94,7 @@ def get_proxy_guardrail() -> Any | None:
     return PromptGuardrail.from_env(
         mode=config.guardrail_mode,
         deep_analysis=config.guardrail_deep_analysis,
+        ledger=get_proxy_guardrail_ledger(),
     )
 
 
