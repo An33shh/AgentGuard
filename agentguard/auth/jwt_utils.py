@@ -25,6 +25,21 @@ logger = logging.getLogger(__name__)
 
 # Warn about missing Redis for revocation only once
 _revocation_redis_warned = False
+# Module-level Redis client — created once, reused across requests
+_redis_client: Any | None = None
+
+
+def _get_redis_client(redis_url: str) -> Any:
+    """Return a cached Redis client, creating it on first call."""
+    global _redis_client
+    if _redis_client is None:
+        import redis.asyncio as aioredis
+        _redis_client = aioredis.from_url(
+            redis_url,
+            socket_connect_timeout=1,
+            max_connections=20,
+        )
+    return _redis_client
 
 
 def _secret() -> str:
@@ -88,10 +103,8 @@ async def check_token_revocation(payload: dict[str, Any]) -> None:
         return  # no Redis configured, revocation not available
 
     try:
-        import redis.asyncio as aioredis
-        client = aioredis.from_url(redis_url, socket_connect_timeout=1)
+        client = _get_redis_client(redis_url)
         is_revoked = await client.exists(f"agentguard:revoked:{jti}")
-        await client.aclose()
         if is_revoked:
             from agentguard.core.errors import AgentGuardHTTPError, ErrorCode
             raise AgentGuardHTTPError(

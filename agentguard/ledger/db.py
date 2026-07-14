@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     TypeDecorator,
+    case,
     select,
     func,
 )
@@ -361,14 +362,14 @@ class PostgresEventLedger(EventLedger):
                 EventRecord.agent_id,
                 func.max(EventRecord.agent_goal).label("agent_goal"),
                 func.max(EventRecord.framework).label("framework"),
-                func.bool_or(EventRecord.agent_is_registered).label("agent_is_registered"),
+                func.max(func.cast(EventRecord.agent_is_registered, Integer)).label("agent_is_registered"),
                 func.min(EventRecord.created_at).label("first_seen"),
                 func.max(EventRecord.created_at).label("last_seen"),
                 func.count(func.distinct(EventRecord.session_id)).label("total_sessions"),
                 func.count(EventRecord.event_id).label("total_events"),
-                func.sum(func.cast(EventRecord.decision == "block", Integer)).label("blocked_events"),
-                func.sum(func.cast(EventRecord.decision == "review", Integer)).label("reviewed_events"),
-                func.sum(func.cast(EventRecord.decision == "allow", Integer)).label("allowed_events"),
+                func.sum(case((EventRecord.decision == "block", 1), else_=0)).label("blocked_events"),
+                func.sum(case((EventRecord.decision == "review", 1), else_=0)).label("reviewed_events"),
+                func.sum(case((EventRecord.decision == "allow", 1), else_=0)).label("allowed_events"),
                 func.avg(EventRecord.risk_score).label("avg_risk"),
                 func.max(EventRecord.risk_score).label("max_risk"),
             )
@@ -407,14 +408,14 @@ class PostgresEventLedger(EventLedger):
                 EventRecord.agent_id,
                 func.max(EventRecord.agent_goal).label("agent_goal"),
                 func.max(EventRecord.framework).label("framework"),
-                func.bool_or(EventRecord.agent_is_registered).label("agent_is_registered"),
+                func.max(func.cast(EventRecord.agent_is_registered, Integer)).label("agent_is_registered"),
                 func.min(EventRecord.created_at).label("first_seen"),
                 func.max(EventRecord.created_at).label("last_seen"),
                 func.count(func.distinct(EventRecord.session_id)).label("total_sessions"),
                 func.count(EventRecord.event_id).label("total_events"),
-                func.sum(func.cast(EventRecord.decision == "block", Integer)).label("blocked_events"),
-                func.sum(func.cast(EventRecord.decision == "review", Integer)).label("reviewed_events"),
-                func.sum(func.cast(EventRecord.decision == "allow", Integer)).label("allowed_events"),
+                func.sum(case((EventRecord.decision == "block", 1), else_=0)).label("blocked_events"),
+                func.sum(case((EventRecord.decision == "review", 1), else_=0)).label("reviewed_events"),
+                func.sum(case((EventRecord.decision == "allow", 1), else_=0)).label("allowed_events"),
                 func.avg(EventRecord.risk_score).label("avg_risk"),
                 func.max(EventRecord.risk_score).label("max_risk"),
             )
@@ -523,9 +524,14 @@ class PostgresEventLedger(EventLedger):
         annotation: AttackTaxonomyAnnotation,
     ) -> None:
         """Attach a post-hoc taxonomy annotation to an existing event."""
-        stmt = sa_text(
-            "UPDATE events SET attack_taxonomy = :annotation::jsonb WHERE event_id = :event_id"
-        )
+        if self._is_sqlite:
+            stmt = sa_text(
+                "UPDATE events SET attack_taxonomy = :annotation WHERE event_id = :event_id"
+            )
+        else:
+            stmt = sa_text(
+                "UPDATE events SET attack_taxonomy = :annotation::jsonb WHERE event_id = :event_id"
+            )
         async with self._sessionmaker() as session:
             await session.execute(
                 stmt,
