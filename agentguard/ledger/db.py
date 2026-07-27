@@ -135,6 +135,12 @@ class EventRecord(Base):
     provenance = Column(_FlexJSON, nullable=False, default=list)
     correlation_id = Column(String(64), nullable=False, default="")
     initiating_principal = Column(String(256), nullable=False, default="")
+
+    # Paper-2 hardening fields — empty string when hardening is disabled.
+    approval_id = Column(String(64), nullable=False, default="")
+    event_hash = Column(String(64), nullable=False, default="")
+    prev_event_hash = Column(String(64), nullable=False, default="")
+
     created_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -222,6 +228,9 @@ class PostgresEventLedger(EventLedger):
             provenance=[t.model_dump() for t in event.provenance],
             correlation_id=event.correlation_id,
             initiating_principal=event.initiating_principal,
+            approval_id=event.approval_id,
+            event_hash=event.event_hash,
+            prev_event_hash=event.prev_event_hash,
             created_at=event.timestamp,
         )
         async with self._sessionmaker() as session:
@@ -624,5 +633,8 @@ class PostgresEventLedger(EventLedger):
             provenance=_deserialize_provenance(record.provenance),
             correlation_id=record.correlation_id or "",
             initiating_principal=record.initiating_principal or "",
+            approval_id=record.approval_id or "",
+            event_hash=record.event_hash or "",
+            prev_event_hash=record.prev_event_hash or "",
             timestamp=record.created_at,
         )

@@ -141,6 +141,11 @@ class Event(BaseModel):
     correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     initiating_principal: str = ""  # JWT sub or auth header hash — who triggered this session
 
+    # Paper-2 hardening fields (agentguard/hardening/) — empty when hardening is disabled.
+    approval_id: str = ""       # links to the ActionApproval that authorized this event, if any
+    event_hash: str = ""        # set by HashChainedEventLedger.append(), not by callers
+    prev_event_hash: str = ""   # set by HashChainedEventLedger.append(), not by callers
+
 
 class AgentProfile(BaseModel):
     """Aggregated profile for a single agent across all sessions."""
