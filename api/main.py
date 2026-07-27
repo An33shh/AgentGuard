@@ -24,7 +24,7 @@ from agentguard.auth.jwt_utils import auth_enabled, validate_auth_config
 from agentguard.telemetry.logger import configure_logging
 from api.dependencies import check_rate_limit, verify_auth
 from api.middleware.request_id import RequestIDMiddleware
-from api.routes import agents, auth, demo, events, health, insights, intercept, policies
+from api.routes import agents, auth, demo, events, guardrail, health, insights, intercept, policies
 
 
 @asynccontextmanager
@@ -143,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(agents.router, dependencies=protected_deps)
     app.include_router(demo.router, dependencies=protected_deps)
     app.include_router(intercept.router, dependencies=protected_deps)
+    app.include_router(guardrail.router, dependencies=protected_deps)
 
     return app
 

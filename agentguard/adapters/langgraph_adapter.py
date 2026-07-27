@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, Callable
 
 import structlog
@@ -11,7 +12,23 @@ from agentguard.core.exceptions import BlockedByAgentGuard
 from agentguard.core.models import Decision, ProvenanceSourceType, ProvenanceTag
 
 if TYPE_CHECKING:
+    from agentguard.guardrail.guardrail import PromptGuardrail
     from agentguard.interceptor.interceptor import Interceptor
+
+
+def _extract_result_text(result: Any) -> str:
+    """Extract text content from a tool result for guardrail scanning."""
+    if isinstance(result, str):
+        return result
+    if hasattr(result, "content"):
+        content = result.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(str(b) for b in content)
+    if isinstance(result, dict):
+        return json.dumps(result)
+    return str(result)
 
 logger = structlog.get_logger(__name__)
 
@@ -39,10 +56,12 @@ class LangGraphAdapter(AgentAdapter):
         interceptor: "Interceptor",
         agent_goal: str,
         session_id: str,
+        guardrail: "PromptGuardrail | None" = None,
     ) -> None:
         self._interceptor = interceptor
         self._agent_goal = agent_goal
         self._session_id = session_id
+        self._guardrail = guardrail
 
     async def before_tool_call(
         self,
@@ -83,10 +102,12 @@ class LangGraphAdapter(AgentAdapter):
         adapter = self
 
         async def guarded_tool(*args: Any, **kwargs: Any) -> Any:
+            from agentguard.guardrail.models import ContextType, GuardrailVerdict
+
             parameters = kwargs if kwargs else (args[0] if args and isinstance(args[0], dict) else {})
             try:
                 await adapter.before_tool_call(name, parameters)
-                return await tool_fn(*args, **kwargs)
+                result = await tool_fn(*args, **kwargs)
             except BlockedByAgentGuard as exc:
                 logger.warning(
                     "langgraph_tool_blocked",
@@ -103,6 +124,45 @@ class LangGraphAdapter(AgentAdapter):
                     )
                 except ImportError:
                     return _BLOCKED_CONTENT
+
+            # Scan the tool result before it reaches the LLM
+            if adapter._guardrail is not None:
+                text = _extract_result_text(result)
+                scan = await adapter._guardrail.scan(text, ContextType.TOOL_RESPONSE)
+
+                if scan.verdict == GuardrailVerdict.BLOCK:
+                    logger.warning(
+                        "langgraph_tool_result_blocked_by_guardrail",
+                        tool=name,
+                        detections=[d.pattern_name for d in scan.detections],
+                    )
+                    try:
+                        from langchain_core.messages import ToolMessage
+                        return ToolMessage(
+                            content=_BLOCKED_CONTENT,
+                            tool_call_id=scan.scan_id,
+                            name=name,
+                        )
+                    except ImportError:
+                        return _BLOCKED_CONTENT
+
+                if scan.verdict == GuardrailVerdict.REDACT and scan.redacted_text is not None:
+                    logger.info(
+                        "langgraph_tool_result_redacted_by_guardrail",
+                        tool=name,
+                        detections=[d.pattern_name for d in scan.detections],
+                    )
+                    try:
+                        from langchain_core.messages import ToolMessage
+                        return ToolMessage(
+                            content=scan.redacted_text,
+                            tool_call_id=scan.scan_id,
+                            name=name,
+                        )
+                    except ImportError:
+                        return scan.redacted_text
+
+            return result
 
         guarded_tool.__name__ = f"guarded_{name}"
         # Preserve any attributes the original tool had (name, description, etc.)

@@ -20,6 +20,11 @@ from agentguard.telemetry.logger import configure_logging
 
 logger = structlog.get_logger(__name__)
 
+_GUARDRAIL_NOT_CONFIGURED = (
+    "PromptGuardrail not configured. Pass guardrail_mode='observe' or "
+    "guardrail_mode='enforce' to SecureAgent.from_env()."
+)
+
 
 class SecureAgent:
     """
@@ -45,6 +50,7 @@ class SecureAgent:
         agent_id: str | None = None,
         session_id: str | None = None,
         framework: str = "unknown",
+        guardrail: Any | None = None,
     ) -> None:
         self._goal = agent_goal
         self._agent_id = agent_id  # explicit identity; None → auto-derived per intercept call
@@ -52,6 +58,7 @@ class SecureAgent:
         self._ledger = ledger
         self._session_id = session_id or str(uuid.uuid4())
         self._framework = framework
+        self._guardrail = guardrail
 
     @classmethod
     def from_env(
@@ -66,6 +73,8 @@ class SecureAgent:
         analyzer_model: str | None = None,
         analyzer_api_key: str | None = None,
         analyzer_base_url: str | None = None,
+        guardrail_mode: str | None = None,
+        guardrail_deep_analysis: bool = False,
     ) -> "SecureAgent":
         """
         Create a SecureAgent from environment variables.
@@ -123,6 +132,18 @@ class SecureAgent:
             event_ledger=event_ledger,
         )
 
+        # Optional guardrail — zero cost when not configured
+        guardrail = None
+        resolved_guardrail_mode = guardrail_mode or os.getenv("AGENTGUARD_GUARDRAIL_MODE")
+        if resolved_guardrail_mode:
+            from agentguard.guardrail import PromptGuardrail
+            guardrail = PromptGuardrail.from_env(
+                mode=resolved_guardrail_mode,
+                deep_analysis=guardrail_deep_analysis,
+                session_id=session_id,
+                agent_id=agent_id or "",
+            )
+
         return cls(
             agent_goal=goal,
             interceptor=interceptor,
@@ -130,6 +151,7 @@ class SecureAgent:
             agent_id=agent_id,
             session_id=session_id,
             framework=framework,
+            guardrail=guardrail,
         )
 
     async def intercept(
@@ -155,6 +177,7 @@ class SecureAgent:
             interceptor=self._interceptor,
             agent_goal=self._goal,
             session_id=self._session_id,
+            guardrail=self._guardrail,
         )
 
     def get_langgraph_adapter(self) -> Any:
@@ -165,12 +188,35 @@ class SecureAgent:
             interceptor=self._interceptor,
             agent_goal=self._goal,
             session_id=self._session_id,
+            guardrail=self._guardrail,
         )
 
     def wrap_langgraph(self, compiled_graph: Any) -> Any:
         """Wrap a compiled LangGraph graph with AgentGuard middleware."""
         adapter = self.get_langgraph_adapter()
         return adapter.wrap_langgraph(compiled_graph)
+
+    async def scan_prompt(
+        self,
+        text: str,
+        context_type: str = "user_input",
+        mode: str | None = None,
+    ) -> Any:
+        """
+        Scan inbound text before sending it to the agent LLM.
+
+        Requires guardrail_mode to be set in from_env() or AGENTGUARD_GUARDRAIL_MODE env var.
+        """
+        if self._guardrail is None:
+            raise RuntimeError(_GUARDRAIL_NOT_CONFIGURED)
+        from agentguard.guardrail.models import ContextType, GuardrailMode
+        ct = ContextType(context_type)
+        m = GuardrailMode(mode) if mode else None
+        return await self._guardrail.scan(text, ct, m)
+
+    def get_guardrail(self) -> Any | None:
+        """Return the PromptGuardrail instance, or None if not configured."""
+        return self._guardrail
 
     def get_openclaw_adapter(self) -> Any:
         """Get OpenClaw adapter for WebSocket gateway integration."""

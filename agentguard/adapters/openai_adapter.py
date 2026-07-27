@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from agentguard.core.exceptions import BlockedByAgentGuard
+from agentguard.core.exceptions import AgentGuardError, BlockedByAgentGuard
 from agentguard.core.models import Decision, ProvenanceSourceType, ProvenanceTag
 
 if TYPE_CHECKING:
+    from agentguard.guardrail.guardrail import PromptGuardrail
     from agentguard.interceptor.interceptor import Interceptor
+
+
+def _extract_result_text(result: Any) -> str:
+    """Extract text content from a tool result for guardrail scanning."""
+    if isinstance(result, str):
+        return result
+    if hasattr(result, "content"):
+        content = result.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(str(b) for b in content)
+    if isinstance(result, dict):
+        return json.dumps(result)
+    return str(result)
 
 logger = structlog.get_logger(__name__)
 
@@ -36,10 +53,12 @@ class AgentGuardOpenAIHooks(_RunHooksBase):  # type: ignore[misc]
         interceptor: "Interceptor",
         agent_goal: str,
         session_id: str,
+        guardrail: "PromptGuardrail | None" = None,
     ) -> None:
         self._interceptor = interceptor
         self._agent_goal = agent_goal
         self._session_id = session_id
+        self._guardrail = guardrail
 
     async def on_tool_start(
         self,
@@ -96,7 +115,32 @@ class AgentGuardOpenAIHooks(_RunHooksBase):  # type: ignore[misc]
             raise BlockedByAgentGuard(event)
 
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any) -> None:
-        """Called after a tool completes (no-op for AgentGuard)."""
+        """Scan tool result for injection/credential/PII before it reaches the LLM."""
+        if self._guardrail is None:
+            return
+
+        from agentguard.guardrail.models import ContextType, GuardrailVerdict
+
+        tool_name = getattr(tool, "name", str(tool))
+        text = _extract_result_text(result)
+
+        scan_result = await self._guardrail.scan(text, ContextType.TOOL_RESPONSE)
+
+        if scan_result.verdict in (GuardrailVerdict.BLOCK, GuardrailVerdict.REDACT):
+            # on_tool_end cannot replace the result — blocking is the only safe option.
+            # REDACT is also blocked here: leaking PII/credentials to the LLM is worse
+            # than stopping the run.
+            logger.warning(
+                "openai_tool_result_blocked_by_guardrail",
+                tool=tool_name,
+                verdict=scan_result.verdict.value,
+                detections=[d.pattern_name for d in scan_result.detections],
+            )
+            raise AgentGuardError(
+                f"Tool result from '{tool_name}' blocked by guardrail "
+                f"(verdict={scan_result.verdict.value}, "
+                f"detections={[d.pattern_name for d in scan_result.detections]})"
+            )
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         """Called when an agent starts (no-op)."""
