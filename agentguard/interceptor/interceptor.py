@@ -16,6 +16,8 @@ from agentguard.interceptor.action_types import (
     is_credential_path,
     extract_file_path,
 )
+from agentguard.hardening.approval import ApprovalAuthority, ApprovalError
+from agentguard.hardening.models import ActionApproval
 from agentguard.integrations.enrichment import get_enrichment_client
 from agentguard.integrations.stream import get_stream_publisher
 
@@ -130,6 +132,8 @@ class Interceptor:
         analyzer: Any,
         policy_engine: Any,
         event_ledger: Any,
+        approval_authority: ApprovalAuthority | None = None,
+        approval_ttl_seconds: int = 30,
     ) -> None:
         self._analyzer = analyzer
         self._policy = policy_engine
@@ -141,6 +145,10 @@ class Interceptor:
         # Per-session action history for multi-step attack detection
         self._session_history: dict[str, list[dict]] = defaultdict(list)
         self._stats_lock = asyncio.Lock()
+        # Paper-2 hardening: per-action signed approval binding (optional, opt-in)
+        self._approval_authority = approval_authority
+        self._approval_ttl_seconds = approval_ttl_seconds
+        self._pending_approvals: dict[str, ActionApproval] = {}
 
     async def intercept(
         self,
@@ -219,6 +227,42 @@ class Interceptor:
                 framework=framework,
             )
             return Decision.BLOCK, event
+
+    def get_approval_token(self, approval_id: str) -> str | None:
+        """Retrieve the signed token for a pending approval, if hardening is enabled."""
+        approval = self._pending_approvals.get(approval_id)
+        return approval.token if approval else None
+
+    async def verify_execution(
+        self,
+        approval_id: str,
+        tool_name: str,
+        parameters: dict[str, Any],
+        session_id: str,
+        correlation_id: str,
+    ) -> None:
+        """
+        Second, independent verification pass at the point of actual tool
+        execution — the counterpart to the approval issued at decision time.
+        Consumes the approval's nonce, so it can only succeed once.
+
+        Raises ApprovalError if hardening isn't configured on this
+        Interceptor, the approval is unknown or already consumed, or
+        verification fails for any other reason (expiry, action-hash
+        mismatch, session/correlation mismatch, replay).
+        """
+        if self._approval_authority is None:
+            raise ApprovalError("Hardening is not enabled on this Interceptor")
+        approval = self._pending_approvals.pop(approval_id, None)
+        if approval is None:
+            raise ApprovalError(f"No pending approval for approval_id={approval_id}")
+        await self._approval_authority.verify_and_consume(
+            token=approval.token,
+            tool_name=tool_name,
+            parameters=parameters,
+            session_id=session_id,
+            correlation_id=correlation_id,
+        )
 
     async def _intercept_inner(
         self,
@@ -425,6 +469,21 @@ class Interceptor:
             correlation_id=correlation_id or str(uuid.uuid4()),
             initiating_principal=initiating_principal,
         )
+
+        # 5.5. Issue a per-action signed approval, binding this exact action
+        # instance (tool + params) to the session/correlation chain that
+        # allowed it. Only ALLOW decisions get one — nothing executes on
+        # REVIEW or BLOCK, so there's nothing to bind an approval to.
+        if self._approval_authority is not None and decision == Decision.ALLOW:
+            approval = self._approval_authority.issue(
+                tool_name=action.tool_name,
+                parameters=action.parameters,
+                session_id=session_id,
+                correlation_id=event.correlation_id,
+                ttl_seconds=self._approval_ttl_seconds,
+            )
+            event.approval_id = approval.approval_id
+            self._pending_approvals[approval.approval_id] = approval
 
         # 6. Log to ledger — fire-and-forget, off the critical path
         asyncio.create_task(self._ledger.append(event))
