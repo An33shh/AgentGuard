@@ -11,6 +11,7 @@ independently, at the point of actual tool execution.
 
 from __future__ import annotations
 
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -97,14 +98,21 @@ class ApprovalAuthority:
         except jwt.InvalidTokenError as exc:
             raise ApprovalError(f"Invalid approval token: {exc}") from exc
 
+        # hmac.compare_digest rather than != — these are security-relevant
+        # equality checks (action binding, session/correlation identity),
+        # and plain string comparison short-circuits on the first differing
+        # byte, a timing side-channel in principle even if impractical to
+        # exploit over a real network.
         expected_hash = compute_action_hash(tool_name, parameters)
-        if claims["action_hash"] != expected_hash:
+        if not hmac.compare_digest(claims["action_hash"], expected_hash):
             raise ApprovalError(
                 "Action mismatch — approval was issued for a different tool call "
                 "(the substitution attack this binding prevents)"
             )
-        if claims["session_id"] != session_id or claims["correlation_id"] != correlation_id:
-            raise ApprovalError("Approval session/correlation mismatch")
+        if not hmac.compare_digest(claims["session_id"], session_id):
+            raise ApprovalError("Approval session mismatch")
+        if not hmac.compare_digest(claims["correlation_id"], correlation_id):
+            raise ApprovalError("Approval correlation mismatch")
 
         expires_at = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
         try:

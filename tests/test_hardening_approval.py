@@ -117,7 +117,7 @@ class TestIssueAndVerify:
             session_id="sess-1",
             correlation_id="corr-1",
         )
-        with pytest.raises(ApprovalError, match="session/correlation mismatch"):
+        with pytest.raises(ApprovalError, match="Approval session mismatch"):
             await authority.verify_and_consume(
                 token=approval.token,
                 tool_name="file.read",
@@ -134,7 +134,7 @@ class TestIssueAndVerify:
             session_id="sess-1",
             correlation_id="corr-1",
         )
-        with pytest.raises(ApprovalError, match="session/correlation mismatch"):
+        with pytest.raises(ApprovalError, match="Approval correlation mismatch"):
             await authority.verify_and_consume(
                 token=approval.token,
                 tool_name="file.read",
@@ -217,3 +217,27 @@ class TestNonceStore:
         expires = datetime.now(timezone.utc) + timedelta(seconds=30)
         await store.consume("nonce-1", expires)
         await store.consume("nonce-2", expires)  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_concurrent_consume_exactly_one_wins(self) -> None:
+        """
+        Security-critical: N coroutines racing to consume the same nonce
+        simultaneously must not let more than one succeed. The asyncio.Lock
+        in InMemoryNonceStore must actually serialize consume(), not just
+        appear to (a bug here would silently defeat replay protection under
+        concurrent load, the exact scenario a real deployment hits).
+        """
+        import asyncio
+        from datetime import datetime, timedelta, timezone
+
+        store = InMemoryNonceStore()
+        expires = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+        results = await asyncio.gather(
+            *[store.consume("shared-nonce", expires) for _ in range(20)],
+            return_exceptions=True,
+        )
+        successes = [r for r in results if r is None]
+        replays = [r for r in results if isinstance(r, NonceReplayError)]
+        assert len(successes) == 1
+        assert len(replays) == 19

@@ -9,7 +9,12 @@ tamper-evident event ledger.
 from agentguard.hardening.approval import ApprovalAuthority, ApprovalError
 from agentguard.hardening.chained_ledger import ChainBrokenError, HashChainedEventLedger
 from agentguard.hardening.models import ActionApproval, HardeningConfig, compute_action_hash
-from agentguard.hardening.nonce_store import InMemoryNonceStore, NonceReplayError, NonceStore
+from agentguard.hardening.nonce_store import (
+    InMemoryNonceStore,
+    NonceReplayError,
+    NonceStore,
+    RedisNonceStore,
+)
 
 __all__ = [
     "ActionApproval",
@@ -17,6 +22,7 @@ __all__ = [
     "compute_action_hash",
     "NonceStore",
     "InMemoryNonceStore",
+    "RedisNonceStore",
     "NonceReplayError",
     "ApprovalAuthority",
     "ApprovalError",
