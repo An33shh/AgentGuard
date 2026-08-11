@@ -189,7 +189,7 @@ class PolicyEngine:
             logger.debug("policy_engine_native_matcher_active")
 
     @classmethod
-    def from_yaml(cls, path: str) -> "PolicyEngine":
+    def from_yaml(cls, path: str) -> PolicyEngine:
         return cls(path=path)
 
     def reload(self, path: str | None = None) -> None:

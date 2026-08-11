@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from agentguard.core.models import Action, RiskAssessment
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.prompts import ASSESS_RISK_TOOL, SYSTEM_PROMPT, build_user_prompt
+from agentguard.core.models import Action, RiskAssessment
 
 # Anthropic tool schema (input_schema format)
 _TOOL = ASSESS_RISK_TOOL

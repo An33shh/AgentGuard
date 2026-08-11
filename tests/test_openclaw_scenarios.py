@@ -91,7 +91,7 @@ class TestOpenClawScenario2:
         Attack: Malicious issue instruction to POST to requestbin
         Expected: BLOCK (domain deny list + risk ≥ 0.88)
         """
-        decision, event = await openclaw_interceptor.intercept(
+        decision, _event = await openclaw_interceptor.intercept(
             raw_payload={
                 "tool_name": "http.post",
                 "parameters": {

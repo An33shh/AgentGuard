@@ -5,12 +5,19 @@ from __future__ import annotations
 import abc
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 
-from agentguard.core.models import AgentGraphData, AgentProfile, AttackTaxonomyAnnotation, Decision, Event, TimelineSummary
+from agentguard.core.models import (
+    AgentGraphData,
+    AgentProfile,
+    AttackTaxonomyAnnotation,
+    Decision,
+    Event,
+    TimelineSummary,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -131,10 +138,10 @@ class InMemoryEventLedger(EventLedger):
         if max_risk is not None:
             events = [e for e in events if e.assessment.risk_score <= max_risk]
         if since:
-            since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+            since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
             events = [e for e in events if e.timestamp >= since_aware]
         if until:
-            until_aware = until if until.tzinfo else until.replace(tzinfo=timezone.utc)
+            until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
             events = [e for e in events if e.timestamp <= until_aware]
 
         events.sort(key=lambda e: e.timestamp, reverse=True)

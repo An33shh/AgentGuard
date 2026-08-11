@@ -41,13 +41,14 @@ def get_http_client() -> httpx.AsyncClient:
 @lru_cache(maxsize=1)
 def get_proxy_interceptor() -> Any:
     """Build and cache the AgentGuard Interceptor for proxy use."""
-    from agentguard.analyzer.intent_analyzer import IntentAnalyzer
+    import os
+    from pathlib import Path
+
     from agentguard.analyzer.backends import create_backend
+    from agentguard.analyzer.intent_analyzer import IntentAnalyzer
     from agentguard.interceptor.interceptor import Interceptor
     from agentguard.ledger.event_ledger import InMemoryEventLedger
     from agentguard.policy.engine import PolicyEngine
-    import os
-    from pathlib import Path
 
     config = get_proxy_config()
     _cwd_policy = Path.cwd() / "policies" / "default.yaml"

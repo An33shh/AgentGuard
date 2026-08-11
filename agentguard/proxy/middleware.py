@@ -45,12 +45,11 @@ class FailClosedMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         except Exception as exc:
             request_id = getattr(request.state, "request_id", "unknown")
-            logger.error(
+            logger.exception(
                 "proxy_unhandled_exception",
                 path=request.url.path,
                 request_id=request_id,
                 error=str(exc),
-                exc_info=True,
             )
             if self._fail_closed:
                 return JSONResponse(

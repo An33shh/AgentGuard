@@ -8,7 +8,7 @@ production on PostgreSQL if not tested locally.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -66,7 +66,7 @@ def _make_event(
         decision=decision,
         correlation_id=str(uuid.uuid4()),
         initiating_principal="test-principal",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
     )
 
 

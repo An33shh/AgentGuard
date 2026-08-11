@@ -13,7 +13,6 @@ from agentguard.interceptor.interceptor import Interceptor
 from agentguard.policy.engine import PolicyEngine
 from agentguard.policy.schema import PolicyConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -125,7 +124,7 @@ class TestPolicyEngineProvenance:
 
     def test_multiple_patterns_any_match_blocks(self) -> None:
         engine = deny_engine("tool_output", "external_data")
-        decision, violation = engine.evaluate_provenance([make_tool_output_tag()])
+        decision, _violation = engine.evaluate_provenance([make_tool_output_tag()])
         assert decision == Decision.BLOCK
 
     def test_detail_contains_label(self) -> None:
@@ -175,7 +174,7 @@ class TestInterceptorProvenance:
             policy_engine=engine,
             event_ledger=event_ledger,
         )
-        decision, event = await inter.intercept(
+        decision, _event = await inter.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
             agent_goal="Summarize README",
             session_id="prov-test-2",

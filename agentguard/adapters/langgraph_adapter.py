@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -53,10 +54,10 @@ class LangGraphAdapter(AgentAdapter):
 
     def __init__(
         self,
-        interceptor: "Interceptor",
+        interceptor: Interceptor,
         agent_goal: str,
         session_id: str,
-        guardrail: "PromptGuardrail | None" = None,
+        guardrail: PromptGuardrail | None = None,
     ) -> None:
         self._interceptor = interceptor
         self._agent_goal = agent_goal

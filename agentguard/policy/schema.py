@@ -33,7 +33,7 @@ class DemotionConfig(BaseModel):
     demoted_review_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
-    def validate_demoted_thresholds(self) -> "DemotionConfig":
+    def validate_demoted_thresholds(self) -> DemotionConfig:
         if self.demoted_review_threshold >= self.demoted_risk_threshold:
             raise ValueError(
                 f"demoted_review_threshold ({self.demoted_review_threshold}) must be less than "
@@ -101,7 +101,7 @@ class PolicyConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate_thresholds(self) -> "PolicyConfig":
+    def validate_thresholds(self) -> PolicyConfig:
         if self.review_threshold >= self.risk_threshold:
             raise ValueError(
                 f"review_threshold ({self.review_threshold}) must be less than "
@@ -110,7 +110,7 @@ class PolicyConfig(BaseModel):
         return self
 
     @classmethod
-    def from_yaml(cls, path: str) -> "PolicyConfig":
+    def from_yaml(cls, path: str) -> PolicyConfig:
         import yaml
 
         with open(path) as f:

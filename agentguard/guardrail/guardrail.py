@@ -13,7 +13,7 @@ import hashlib
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -81,7 +81,7 @@ class PromptGuardrail:
         ledger: GuardrailLedger | None = None,
         session_id: str | None = None,
         agent_id: str = "",
-    ) -> "PromptGuardrail":
+    ) -> PromptGuardrail:
         """Create from environment variables."""
         resolved_mode = GuardrailMode(
             os.getenv("AGENTGUARD_GUARDRAIL_MODE", mode)
@@ -162,7 +162,7 @@ class PromptGuardrail:
             reported_verdict = GuardrailVerdict.ALLOW
 
         latency_ms = (time.monotonic() - start) * 1000
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         result = GuardrailResult(
             scan_id=uuid.uuid4().hex,

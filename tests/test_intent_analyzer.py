@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agentguard.analyzer.intent_analyzer import IntentAnalyzer
+import pytest
+
 from agentguard.analyzer.backends.anthropic_backend import AnthropicBackend
+from agentguard.analyzer.intent_analyzer import IntentAnalyzer
 from agentguard.core.models import Action, ActionType
 
 
@@ -106,8 +107,9 @@ class TestIntentAnalyzerSuccess:
     @pytest.mark.asyncio
     async def test_risk_score_clamped_to_range(self) -> None:
         """Risk score validator clamps within [0.0, 1.0] — Pydantic enforces bounds."""
-        from agentguard.core.models import RiskAssessment
         import pydantic
+
+        from agentguard.core.models import RiskAssessment
 
         with pytest.raises(pydantic.ValidationError):
             RiskAssessment(risk_score=1.5, reason="test", indicators=[])
@@ -211,7 +213,7 @@ class TestFailClosedTypes:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise Exception("first call failed")
+                raise RuntimeError("first call failed")
             from agentguard.core.models import RiskAssessment
             return RiskAssessment(
                 risk_score=0.3,

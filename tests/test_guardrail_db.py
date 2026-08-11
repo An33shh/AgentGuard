@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -34,7 +34,7 @@ def _make_guardrail_event(
     verdict: GuardrailVerdict = GuardrailVerdict.ALLOW,
     detections: list[GuardrailDetection] | None = None,
 ) -> GuardrailEvent:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = GuardrailResult(
         scan_id=uuid.uuid4().hex,
         verdict=verdict,

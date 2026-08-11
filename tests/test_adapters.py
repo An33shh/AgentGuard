@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from agentguard.adapters.openai_adapter import AgentGuardOpenAIHooks
 from agentguard.adapters.langgraph_adapter import LangGraphAdapter
+from agentguard.adapters.openai_adapter import AgentGuardOpenAIHooks
 from agentguard.core.exceptions import AgentGuardError, BlockedByAgentGuard
 from agentguard.core.models import Decision
 from agentguard.guardrail.guardrail import PromptGuardrail

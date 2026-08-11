@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
 from dotenv import load_dotenv
 
@@ -44,8 +44,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (missing YAML, bad env vars, unreachable backend) surfaces at startup rather
     # than on the first request. Both are @lru_cache singletons — this call primes
     # the cache; subsequent calls return the same object at O(1).
-    from api.dependencies import get_interceptor, get_ledger, get_policy_engine
     from agentguard.ledger.db import PostgresEventLedger
+    from api.dependencies import get_interceptor, get_ledger, get_policy_engine
     try:
         get_policy_engine()
         interceptor = get_interceptor()
@@ -61,8 +61,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Auto-seed demo scenarios so the dashboard has data on first run
     if os.getenv("AGENTGUARD_AUTO_SEED", "").lower() == "true":
-        from api.routes.demo import OPENCLAW_SCENARIOS
         import uuid as _uuid
+
+        from api.routes.demo import OPENCLAW_SCENARIOS
         existing = await ledger.list_events(limit=1)
         if not existing:
             # Attack scenarios in one session — triggers realistic demotion

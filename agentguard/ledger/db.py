@@ -3,26 +3,27 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     Float,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     TypeDecorator,
     case,
-    select,
     func,
+    select,
 )
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -66,7 +67,6 @@ class _FlexUUID(TypeDecorator):
         return uuid.UUID(str(value))
 
 import structlog
-
 from sqlalchemy import text as sa_text
 
 from agentguard.core.models import (
@@ -97,8 +97,8 @@ class SessionRecord(Base):
     session_id = Column(String(64), primary_key=True)
     agent_goal = Column(Text, nullable=False)
     framework = Column(String(64), nullable=False, default="unknown")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     total_events = Column(Integer, nullable=False, default=0)
     blocked_events = Column(Integer, nullable=False, default=0)
 
@@ -135,6 +135,12 @@ class EventRecord(Base):
     provenance = Column(_FlexJSON, nullable=False, default=list)
     correlation_id = Column(String(64), nullable=False, default="")
     initiating_principal = Column(String(256), nullable=False, default="")
+
+    # Paper-2 hardening fields — empty string when hardening is disabled.
+    approval_id = Column(String(64), nullable=False, default="")
+    event_hash = Column(String(64), nullable=False, default="")
+    prev_event_hash = Column(String(64), nullable=False, default="")
+
     created_at = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
@@ -222,6 +228,9 @@ class PostgresEventLedger(EventLedger):
             provenance=[t.model_dump() for t in event.provenance],
             correlation_id=event.correlation_id,
             initiating_principal=event.initiating_principal,
+            approval_id=event.approval_id,
+            event_hash=event.event_hash,
+            prev_event_hash=event.prev_event_hash,
             created_at=event.timestamp,
         )
         async with self._sessionmaker() as session:
@@ -277,10 +286,10 @@ class PostgresEventLedger(EventLedger):
         if max_risk is not None:
             query = query.where(EventRecord.risk_score <= max_risk)
         if since:
-            since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+            since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
             query = query.where(EventRecord.created_at >= since_aware)
         if until:
-            until_aware = until if until.tzinfo else until.replace(tzinfo=timezone.utc)
+            until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
             query = query.where(EventRecord.created_at <= until_aware)
         query = query.order_by(EventRecord.created_at.desc()).offset(offset).limit(limit)
         async with self._sessionmaker() as session:
@@ -624,5 +633,8 @@ class PostgresEventLedger(EventLedger):
             provenance=_deserialize_provenance(record.provenance),
             correlation_id=record.correlation_id or "",
             initiating_principal=record.initiating_principal or "",
+            approval_id=record.approval_id or "",
+            event_hash=record.event_hash or "",
+            prev_event_hash=record.prev_event_hash or "",
             timestamp=record.created_at,
         )

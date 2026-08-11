@@ -8,11 +8,16 @@ import time
 from typing import Any  # used for body: dict[str, Any]
 
 import jwt as _jwt
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from agentguard.auth.jwt_utils import auth_enabled, check_token_revocation, create_access_token, token_expire_seconds, verify_token
+from agentguard.auth.jwt_utils import (
+    auth_enabled,
+    check_token_revocation,
+    create_access_token,
+    token_expire_seconds,
+    verify_token,
+)
 from agentguard.auth.rate_limiter import get_rate_limiter
 from agentguard.core.errors import AgentGuardHTTPError, ErrorCode
 

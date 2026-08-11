@@ -43,8 +43,8 @@ class ProxyPipeline:
 
     def __init__(
         self,
-        interceptor: "Interceptor",
-        guardrail: "PromptGuardrail | None",
+        interceptor: Interceptor,
+        guardrail: PromptGuardrail | None,
         scan_inbound: bool = True,
         intercept_tool_calls: bool = True,
     ) -> None:

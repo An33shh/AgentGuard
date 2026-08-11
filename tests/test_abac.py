@@ -190,7 +190,7 @@ class TestEvaluateRiskOverrides:
         engine = PolicyEngine(config=PolicyConfig(
             name="t", risk_threshold=0.75, review_threshold=0.60
         ))
-        decision, violation = engine.evaluate_risk(0.55, risk_threshold=0.50)
+        decision, _violation = engine.evaluate_risk(0.55, risk_threshold=0.50)
         assert decision == Decision.BLOCK
 
     def test_custom_review_threshold(self) -> None:

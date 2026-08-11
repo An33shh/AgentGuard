@@ -8,7 +8,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -127,8 +126,8 @@ def _run_inline_demo() -> None:
     import asyncio
 
     async def run() -> None:
-        from agentguard.core.secure_agent import SecureAgent
         from agentguard.core.models import Decision
+        from agentguard.core.secure_agent import SecureAgent
 
         scenarios = [
             {
@@ -172,9 +171,9 @@ def _run_inline_demo() -> None:
 
 def cmd_status(_args: argparse.Namespace) -> None:
     """Check if the AgentGuard API is running and healthy."""
-    import urllib.request
-    import urllib.error
     import json
+    import urllib.error
+    import urllib.request
 
     base_url = os.getenv("AGENTGUARD_API_URL", "http://localhost:8747")
 

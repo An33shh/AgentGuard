@@ -27,7 +27,7 @@ def _p(
     pattern: str,
     category: DetectionCategory,
     confidence: float = 0.92,
-    flags: int = re.I,
+    flags: int = re.IGNORECASE,
 ) -> _Pattern:
     return _Pattern(name=name, category=category, regex=re.compile(pattern, flags), confidence=confidence)
 

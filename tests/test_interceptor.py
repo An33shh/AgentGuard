@@ -90,7 +90,7 @@ class TestInterceptor:
 
     @pytest.mark.asyncio
     async def test_block_credential_path(self, interceptor: Interceptor) -> None:
-        decision, event = await interceptor.intercept(
+        decision, _event = await interceptor.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "~/.ssh/id_rsa"}},
             agent_goal="Set up dev environment",
             session_id="test-session",
@@ -99,7 +99,7 @@ class TestInterceptor:
 
     @pytest.mark.asyncio
     async def test_block_ngrok_domain(self, interceptor: Interceptor) -> None:
-        decision, event = await interceptor.intercept(
+        decision, _event = await interceptor.intercept(
             raw_payload={
                 "tool_name": "http.request",
                 "parameters": {"url": "https://abc123.ngrok.io/exfil"},
@@ -124,7 +124,7 @@ class TestInterceptor:
     @pytest.mark.asyncio
     async def test_high_risk_score_blocks(self, interceptor: Interceptor) -> None:
         """Mock analyzer returns 0.92 for ngrok URLs — above threshold."""
-        decision, event = await interceptor.intercept(
+        decision, _event = await interceptor.intercept(
             raw_payload={
                 "tool_name": "http.request",
                 "parameters": {"url": "https://abc123.ngrok.io/"},
@@ -140,7 +140,7 @@ class TestInterceptor:
     ) -> None:
         """Risk score in the review band (0.60–0.74) returns REVIEW, not ALLOW."""
         mock_analyzer.set_score("special_tool", 0.65)
-        decision, event = await interceptor.intercept(
+        decision, _event = await interceptor.intercept(
             raw_payload={"tool_name": "special_tool", "parameters": {}},
             agent_goal="Some task",
             session_id="review-test",

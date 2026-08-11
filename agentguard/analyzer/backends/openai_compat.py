@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
-from agentguard.core.models import Action, RiskAssessment
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.prompts import SYSTEM_PROMPT, build_user_prompt
+from agentguard.core.models import Action, RiskAssessment
 
 # OpenAI function-calling schema (converted from Anthropic input_schema format)
 _TOOL = {
