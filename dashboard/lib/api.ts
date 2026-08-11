@@ -2,7 +2,15 @@
 
 import type { AgentGraphData, AgentProfile, Decision, Event, PolicyConfig, Stats, TimelineSummary } from "@/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Server Components (the async page.tsx files) run inside the dashboard
+// container itself and must reach the API via its Docker service name.
+// "use client" components run in the browser and must use the
+// browser-reachable, NEXT_PUBLIC_-inlined URL instead — the two are not
+// interchangeable in a containerized deployment.
+const API_BASE =
+  typeof window === "undefined"
+    ? process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function fetchAPI<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;

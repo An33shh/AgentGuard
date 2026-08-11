@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -69,10 +67,13 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8747
     ports:
       - "3747:3747"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8747
+      API_INTERNAL_URL: http://agentguard-api:8747
     depends_on:
       - agentguard-api
 

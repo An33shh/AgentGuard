@@ -29,6 +29,7 @@ dependencies = [
     "asyncpg>=0.30.0",
     "aiosqlite>=0.20.0",
     "alembic>=1.14.0",
+    "psycopg2-binary>=2.9.9",  # sync driver alembic/env.py requires for migrations
     "structlog>=24.4.0",
     "opentelemetry-sdk>=1.28.0",
     "opentelemetry-instrumentation-fastapi>=0.49b0",

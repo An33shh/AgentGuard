@@ -1,5 +1,6 @@
 """Alembic environment configuration."""
 
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -10,6 +11,12 @@ from agentguard.ledger.db import Base
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# DATABASE_URL (set by docker-compose and deployment envs) overrides
+# alembic.ini's static local-dev default so migrations target the same
+# database the app connects to, without editing alembic.ini per environment.
+if database_url := os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
 

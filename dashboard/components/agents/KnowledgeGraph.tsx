@@ -1,9 +1,18 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useMemo, useCallback, useState, useEffect, useRef } from "react";
+import { useMemo, useCallback, useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { AgentGraphData, GraphNode } from "@/types";
+
+// react-force-graph-2d touches `window` at import time, so it can only render
+// after client-side mount. useSyncExternalStore (server snapshot: false,
+// client snapshot: true) is the React-recommended way to derive that "have we
+// hydrated yet" flag without setState-in-effect cascading renders.
+const noopSubscribe = () => () => {};
+function useMounted(): boolean {
+  return useSyncExternalStore(noopSubscribe, () => true, () => false);
+}
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -228,11 +237,9 @@ export function KnowledgeGraph({ data, height = 500 }: KnowledgeGraphProps) {
   const bgCanvasRef  = useRef<HTMLCanvasElement>(null);
   const [fullscreen, setFullscreen]     = useState(false);
   const [dims, setDims]                 = useState({ w: 0, h: height });
-  const [mounted, setMounted]           = useState(false);
+  const mounted = useMounted();
   const [hoveredId, setHoveredId]       = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeCanvasObj | null>(null);
-
-  useEffect(() => { setMounted(true); }, []);
 
   // Accurate width via ResizeObserver (fires after layout, not before)
   useEffect(() => {
