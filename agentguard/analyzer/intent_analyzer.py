@@ -11,9 +11,9 @@ from typing import Any
 
 import structlog
 
-from agentguard.core.models import Action, ActionType, RiskAssessment
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.local_classifier import LocalClassifier
+from agentguard.core.models import Action, ActionType, RiskAssessment
 
 _CACHE_MAX_SIZE = 1024
 
@@ -162,7 +162,7 @@ class IntentAnalyzer:
         )
         try:
             return await asyncio.wait_for(asyncio.shield(task1), timeout=self._hedge_after)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.info("hedge_triggered", hedge_after=self._hedge_after)
             task2 = asyncio.create_task(
                 self._backend.assess(action, agent_goal, session_context)

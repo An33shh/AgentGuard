@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -54,7 +54,7 @@ class ActionApproval(BaseModel):
     session_id: str
     correlation_id: str
     nonce: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    issued_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime
     token: str = ""
 

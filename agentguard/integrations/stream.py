@@ -89,8 +89,8 @@ class RedisStreamConsumer:
         client = await self._get_client()
         try:
             await client.xgroup_create(EVENTS_STREAM, CONSUMER_GROUP, id="0", mkstream=True)
-        except Exception:
-            pass  # group already exists
+        except Exception:  # noqa: S110 — group already exists
+            pass
 
     async def run(self, handler: Any, poll_interval: float = 0.5) -> None:
         """

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
-import pytest
 
 import jwt
-from httpx import AsyncClient, ASGITransport
+import pytest
+from httpx import ASGITransport, AsyncClient
 
 from agentguard.auth.jwt_utils import create_access_token, verify_token
 from agentguard.auth.rate_limiter import RateLimiter, reset_rate_limiter
-
 
 # ---------------------------------------------------------------------------
 # JWT utils
@@ -90,7 +90,7 @@ class TestRateLimiter:
         await limiter.is_allowed("client-z")
         await limiter.is_allowed("client-z")
         assert await limiter.is_allowed("client-z") is False
-        time.sleep(0.15)
+        await asyncio.sleep(0.15)
         # After window expires, requests should be allowed again
         assert await limiter.is_allowed("client-z") is True
 
@@ -125,11 +125,11 @@ def auth_env(monkeypatch):
 @pytest.fixture
 def auth_app(auth_env):
     """FastAPI app with auth enabled."""
-    from api.dependencies import get_ledger, get_policy_engine
-    from api.main import create_app
     from agentguard.ledger.event_ledger import InMemoryEventLedger
     from agentguard.policy.engine import PolicyEngine
     from agentguard.policy.schema import PolicyConfig
+    from api.dependencies import get_ledger, get_policy_engine
+    from api.main import create_app
 
     app = create_app()
     app.dependency_overrides[get_ledger] = lambda: InMemoryEventLedger()

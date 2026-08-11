@@ -7,8 +7,9 @@ module level rather than at the backends.openai_compat module level.
 from __future__ import annotations
 
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from agentguard.analyzer.backends.openai_compat import OpenAICompatBackend
 from agentguard.analyzer.intent_analyzer import IntentAnalyzer

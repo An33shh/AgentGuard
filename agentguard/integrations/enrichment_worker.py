@@ -20,7 +20,7 @@ import structlog
 
 from agentguard.integrations.enrichment import get_enrichment_client
 from agentguard.integrations.insights import get_insights_store
-from agentguard.integrations.stream import get_stream_publisher, RedisStreamConsumer
+from agentguard.integrations.stream import RedisStreamConsumer, get_stream_publisher
 from agentguard.telemetry.logger import configure_logging
 
 logger = structlog.get_logger(__name__)

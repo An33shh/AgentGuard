@@ -12,7 +12,7 @@ from agentguard.core.models import Action, RiskAssessment
 
 # Unambiguous prompt injection signals in parameter values
 _INJECTION_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(p, re.I)
+    re.compile(p, re.IGNORECASE)
     for p in [
         r"ignore\s+(previous|prior|all|your)\s+instructions?",
         r"override\s+(your|the|all|previous)\s+(goal|instruction|directive|system)",
@@ -57,7 +57,7 @@ class LocalClassifier:
         """
         Return a high-confidence RiskAssessment or None (→ call LLM).
         """
-        injected, pattern = _params_contain_injection(action.parameters)
+        injected, _pattern = _params_contain_injection(action.parameters)
         if injected:
             return RiskAssessment(
                 risk_score=self.INJECTION_SCORE,

@@ -7,6 +7,8 @@ classifies the OpenClaw attack corpus + a safe baseline corpus.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from agentguard.core.models import Action, Decision, RiskAssessment
@@ -14,7 +16,6 @@ from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
 from agentguard.policy.schema import PolicyConfig
-
 
 # ---------------------------------------------------------------------------
 # Labeled corpus — (payload, expected_decision)
@@ -56,7 +57,7 @@ SAFE_CORPUS: list[tuple[dict, Decision]] = [
 class EvalMockAnalyzer:
     """Deterministic mock analyzer for eval — scores based on known corpus."""
 
-    _SCORES: dict[str, float] = {
+    _SCORES: ClassVar[dict[str, float]] = {
         "ngrok": 0.92,
         "requestbin": 0.88,
         "webhook.site": 0.85,
@@ -181,7 +182,7 @@ class TestEvalMetrics:
             {"tool_name": "bash.run", "parameters": {"script": "echo hi"}},
         ]
         for payload in policy_cases:
-            decision, event = await eval_interceptor.intercept(
+            decision, _event = await eval_interceptor.intercept(
                 raw_payload=payload,
                 agent_goal="Summarize README.md",
                 session_id=f"policy-eval-{payload['tool_name']}",

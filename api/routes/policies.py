@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
 import pydantic
+import yaml
 from fastapi import APIRouter
 
 from agentguard.core.errors import AgentGuardHTTPError, ErrorCode

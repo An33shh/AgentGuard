@@ -91,7 +91,7 @@ class TestVerifyExecution:
 
     @pytest.mark.asyncio
     async def test_verify_execution_rejects_replay(self, hardened_interceptor: Interceptor) -> None:
-        decision, event = await hardened_interceptor.intercept(
+        _decision, event = await hardened_interceptor.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
             agent_goal="read the readme",
             session_id="sess-1",
@@ -129,7 +129,7 @@ class TestVerifyExecution:
     async def test_verify_execution_rejects_param_substitution(
         self, hardened_interceptor: Interceptor
     ) -> None:
-        decision, event = await hardened_interceptor.intercept(
+        _decision, event = await hardened_interceptor.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
             agent_goal="read the readme",
             session_id="sess-1",

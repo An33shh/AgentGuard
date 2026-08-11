@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -71,7 +71,7 @@ class Action(BaseModel):
     tool_name: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     raw_payload: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     model_config = {"use_enum_values": False}
 
@@ -135,7 +135,7 @@ class Event(BaseModel):
     assessment: RiskAssessment
     decision: Decision
     policy_violation: PolicyViolation | None = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     provenance: list[ProvenanceTag] = Field(default_factory=list)
     framework: str = "unknown"
     correlation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))

@@ -6,8 +6,8 @@ import os
 import re
 import warnings
 
-from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.backends.anthropic_backend import AnthropicBackend
+from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.backends.openai_compat import OpenAICompatBackend
 
 __all__ = ["AnalyzerBackend", "AnthropicBackend", "OpenAICompatBackend", "create_backend"]

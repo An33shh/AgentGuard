@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from agentguard.core.models import Action, Decision, Event, RiskAssessment
-from agentguard.hardening.chained_ledger import GENESIS_HASH, ChainBrokenError, HashChainedEventLedger
+from agentguard.hardening.chained_ledger import (
+    GENESIS_HASH,
+    ChainBrokenError,
+    HashChainedEventLedger,
+)
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 
 

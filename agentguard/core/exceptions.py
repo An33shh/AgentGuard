@@ -15,7 +15,7 @@ class AgentGuardError(Exception):
 class BlockedByAgentGuard(AgentGuardError):
     """Raised when an agent action is blocked by AgentGuard policy."""
 
-    def __init__(self, event: "Event") -> None:
+    def __init__(self, event: Event) -> None:
         self.event = event
         super().__init__(
             f"Action '{event.action.tool_name}' blocked. "

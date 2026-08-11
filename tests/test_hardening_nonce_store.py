@@ -9,9 +9,10 @@ these are integration tests, not unit tests, and require
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+import redis.exceptions
 
 from agentguard.hardening.nonce_store import NonceReplayError, RedisNonceStore
 
@@ -39,7 +40,7 @@ async def _skip_if_unreachable():
 
 @pytest.fixture
 def expires_at() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(seconds=30)
+    return datetime.now(UTC) + timedelta(seconds=30)
 
 
 class TestRedisNonceStoreBasic:
@@ -115,5 +116,5 @@ class TestRedisNonceStoreFailureMode:
         import uuid
         # Port 1 is not a Redis instance — connection will fail fast.
         store = RedisNonceStore("redis://localhost:1/0")
-        with pytest.raises(Exception):
+        with pytest.raises(redis.exceptions.RedisError):
             await store.consume(f"nonce-{uuid.uuid4().hex}", expires_at)

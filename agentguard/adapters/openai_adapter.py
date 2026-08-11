@@ -50,10 +50,10 @@ class AgentGuardOpenAIHooks(_RunHooksBase):  # type: ignore[misc]
 
     def __init__(
         self,
-        interceptor: "Interceptor",
+        interceptor: Interceptor,
         agent_goal: str,
         session_id: str,
-        guardrail: "PromptGuardrail | None" = None,
+        guardrail: PromptGuardrail | None = None,
     ) -> None:
         self._interceptor = interceptor
         self._agent_goal = agent_goal

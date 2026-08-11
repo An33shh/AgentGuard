@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from agentguard.core.models import Action, ActionType, Decision, Event, RiskAssessment
 from agentguard.ledger.event_ledger import InMemoryEventLedger

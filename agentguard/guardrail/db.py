@@ -11,23 +11,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from sqlalchemy import (
+    JSON,
     Column,
     DateTime,
     Float,
     Index,
     Integer,
-    JSON,
     String,
     TypeDecorator,
-    select,
     func,
+    select,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-
-import structlog
 
 from agentguard.guardrail.ledger import GuardrailLedger
 from agentguard.guardrail.models import (

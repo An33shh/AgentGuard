@@ -28,7 +28,7 @@ class TestDenyTools:
 
     def test_blocks_bash(self, engine: PolicyEngine) -> None:
         action = make_action("bash", {"command": "cat /etc/passwd"})
-        decision, violation = engine.evaluate(action)
+        decision, _violation = engine.evaluate(action)
         assert decision == Decision.BLOCK
 
     def test_allows_file_read(self, engine: PolicyEngine) -> None:
@@ -41,17 +41,17 @@ class TestDenyTools:
 class TestDenyPathPatterns:
     def test_blocks_ssh_key(self, engine: PolicyEngine) -> None:
         action = make_action("file.read", {"path": "~/.ssh/id_rsa"}, ActionType.CREDENTIAL_ACCESS)
-        decision, violation = engine.evaluate(action)
+        decision, _violation = engine.evaluate(action)
         assert decision == Decision.BLOCK
 
     def test_blocks_aws_credentials(self, engine: PolicyEngine) -> None:
         action = make_action("file.read", {"path": "~/.aws/credentials"}, ActionType.CREDENTIAL_ACCESS)
-        decision, violation = engine.evaluate(action)
+        decision, _violation = engine.evaluate(action)
         assert decision == Decision.BLOCK
 
     def test_blocks_pem_file(self, engine: PolicyEngine) -> None:
         action = make_action("file.read", {"path": "/certs/server.pem"}, ActionType.CREDENTIAL_ACCESS)
-        decision, violation = engine.evaluate(action)
+        decision, _violation = engine.evaluate(action)
         assert decision == Decision.BLOCK
 
     def test_allows_readme(self, engine: PolicyEngine) -> None:
@@ -99,11 +99,11 @@ class TestRiskThreshold:
         assert violation.rule_name == "risk_threshold"
 
     def test_allows_below_threshold(self, engine: PolicyEngine) -> None:
-        decision, violation = engine.evaluate_risk(0.50)
+        decision, _violation = engine.evaluate_risk(0.50)
         assert decision == Decision.ALLOW
 
     def test_review_in_range(self, engine: PolicyEngine) -> None:
-        decision, violation = engine.evaluate_risk(0.65)
+        decision, _violation = engine.evaluate_risk(0.65)
         assert decision == Decision.REVIEW
 
     def test_blocks_at_threshold(self, engine: PolicyEngine) -> None:

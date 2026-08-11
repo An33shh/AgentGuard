@@ -203,6 +203,6 @@ def reset_rate_limiter() -> None:
             if keys:
                 client.delete(*keys)
             client.close()
-        except Exception:
-            pass  # Redis unavailable — nothing to flush
+        except Exception:  # noqa: S110 — Redis unavailable, nothing to flush
+            pass
     _limiter = None

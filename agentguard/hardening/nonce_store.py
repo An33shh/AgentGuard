@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -44,7 +44,7 @@ class InMemoryNonceStore(NonceStore):
             self._used[nonce] = expires_at
 
     def _purge_expired(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired = [n for n, exp in self._used.items() if exp < now]
         for n in expired:
             del self._used[n]
@@ -75,7 +75,7 @@ class RedisNonceStore(NonceStore):
 
     async def consume(self, nonce: str, expires_at: datetime) -> None:
         client = self._get_client()
-        ttl_seconds = max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+        ttl_seconds = max(1, int((expires_at - datetime.now(UTC)).total_seconds()))
         was_set = await client.set(f"agentguard:nonce:{nonce}", "1", nx=True, ex=ttl_seconds)
         if not was_set:
             raise NonceReplayError(f"Nonce already consumed: {nonce}")

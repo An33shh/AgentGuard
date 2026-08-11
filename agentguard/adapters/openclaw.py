@@ -69,7 +69,7 @@ class OpenClawAdapter(AgentAdapter):
 
     def __init__(
         self,
-        interceptor: "Interceptor",
+        interceptor: Interceptor,
         agent_goal: str,
         session_id: str,
         agent_id: str | None = None,

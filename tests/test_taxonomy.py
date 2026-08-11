@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from agentguard.taxonomy import (
     ATLAS_TECHNIQUES,
     OWASP_ENTRIES,
@@ -134,7 +133,7 @@ class TestPolicyViolationTaxonomy:
     def test_deny_tools_violation_has_atlas_ids(self, policy_engine):
         from agentguard.core.models import Action, ActionType
         action = Action(tool_name="shell.execute", type=ActionType.SHELL_COMMAND, parameters={})
-        decision, violation = policy_engine.evaluate(action)
+        _decision, violation = policy_engine.evaluate(action)
         assert violation is not None
         assert "AML.T0051" in violation.mitre_atlas_ids
         assert "AA02" in violation.owasp_categories
@@ -143,15 +142,15 @@ class TestPolicyViolationTaxonomy:
         from agentguard.core.models import Action, ActionType
         action = Action(tool_name="file.read", type=ActionType.CREDENTIAL_ACCESS,
                         parameters={"path": "~/.aws/credentials"})
-        decision, violation = policy_engine.evaluate(action)
+        _decision, violation = policy_engine.evaluate(action)
         assert violation is not None
         assert "AML.T0058" in violation.mitre_atlas_ids
         assert "AA03" in violation.owasp_categories
 
     def test_provenance_violation_has_atlas_ids(self, policy_engine):
-        from agentguard.core.models import ProvenanceTag, ProvenanceSourceType
-        from agentguard.policy.schema import PolicyConfig
+        from agentguard.core.models import ProvenanceSourceType, ProvenanceTag
         from agentguard.policy.engine import PolicyEngine
+        from agentguard.policy.schema import PolicyConfig
         config = PolicyConfig(
             risk_threshold=0.75,
             review_threshold=0.60,
@@ -159,7 +158,7 @@ class TestPolicyViolationTaxonomy:
         )
         engine = PolicyEngine(config=config)
         tags = [ProvenanceTag(source_type=ProvenanceSourceType.EXTERNAL_DATA, label="test")]
-        decision, violation = engine.evaluate_provenance(tags)
+        _decision, violation = engine.evaluate_provenance(tags)
         assert violation is not None
         assert "AML.T0054" in violation.mitre_atlas_ids
         assert "AA01" in violation.owasp_categories
@@ -182,7 +181,7 @@ class TestPolicyViolationTaxonomy:
         )
         engine = PolicyEngine(config=config)
         action = Action(tool_name="shell.execute", type=ActionType.SHELL_COMMAND, parameters={})
-        decision, violation = engine.evaluate(action)
+        _decision, violation = engine.evaluate(action)
         assert violation is not None
         # Auto-detected IDs still present
         assert "AML.T0051" in violation.mitre_atlas_ids

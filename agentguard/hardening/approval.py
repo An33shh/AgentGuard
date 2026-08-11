@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hmac
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -55,7 +55,7 @@ class ApprovalAuthority:
         correlation_id: str,
         ttl_seconds: int = 30,
     ) -> ActionApproval:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(seconds=ttl_seconds)
         action_hash = compute_action_hash(tool_name, parameters)
         approval = ActionApproval(
@@ -114,7 +114,7 @@ class ApprovalAuthority:
         if not hmac.compare_digest(claims["correlation_id"], correlation_id):
             raise ApprovalError("Approval correlation mismatch")
 
-        expires_at = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
+        expires_at = datetime.fromtimestamp(claims["exp"], tz=UTC)
         try:
             await self._nonce_store.consume(claims["nonce"], expires_at)
         except NonceReplayError as exc:

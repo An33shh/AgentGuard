@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 
 import pytest
 
@@ -201,20 +202,20 @@ class TestIssueAndVerify:
 class TestNonceStore:
     @pytest.mark.asyncio
     async def test_consume_twice_raises(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         store = InMemoryNonceStore()
-        expires = datetime.now(timezone.utc) + timedelta(seconds=30)
+        expires = datetime.now(UTC) + timedelta(seconds=30)
         await store.consume("nonce-1", expires)
         with pytest.raises(NonceReplayError):
             await store.consume("nonce-1", expires)
 
     @pytest.mark.asyncio
     async def test_different_nonces_independent(self) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         store = InMemoryNonceStore()
-        expires = datetime.now(timezone.utc) + timedelta(seconds=30)
+        expires = datetime.now(UTC) + timedelta(seconds=30)
         await store.consume("nonce-1", expires)
         await store.consume("nonce-2", expires)  # should not raise
 
@@ -228,10 +229,10 @@ class TestNonceStore:
         concurrent load, the exact scenario a real deployment hits).
         """
         import asyncio
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         store = InMemoryNonceStore()
-        expires = datetime.now(timezone.utc) + timedelta(seconds=30)
+        expires = datetime.now(UTC) + timedelta(seconds=30)
 
         results = await asyncio.gather(
             *[store.consume("shared-nonce", expires) for _ in range(20)],

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from agentguard.guardrail.guardrail import PromptGuardrail
 from agentguard.guardrail.models import GuardrailConfig, GuardrailMode

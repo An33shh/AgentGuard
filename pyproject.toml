@@ -51,7 +51,7 @@ dev       = [
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
     "pytest-mock>=3.14.0",
-    "ruff>=0.8.0",
+    "ruff==0.16.2",
     "mypy>=1.13.0",
     "maturin>=1.5",
 ]
@@ -95,8 +95,19 @@ omit   = ["tests/*", "examples/*"]
 line-length    = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# BLE001 (blind `except Exception`) is deliberate throughout this codebase for
+# fail-safe boundaries (best-effort cleanup, API error handlers that must never
+# 500 on an unexpected exception type) — narrowing each one individually would
+# require auditing every call site's exact exception surface with no safety
+# benefit. Each site already documents why it's broad via an adjacent comment.
+ignore = ["BLE001"]
+
 [tool.ruff.lint.per-file-ignores]
 # load_dotenv() must run before framework imports to populate env vars in time
 "api/main.py"             = ["E402"]
 # Conditional SQLAlchemy dialect imports require deferred module-level imports
 "agentguard/ledger/db.py" = ["E402"]
+# FastAPI's dependency-injection pattern requires Depends()/Query() as argument
+# defaults — this is idiomatic FastAPI, not a real mutable-default bug.
+"api/**/*.py"             = ["B008"]

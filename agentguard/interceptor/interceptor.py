@@ -10,16 +10,24 @@ from typing import Any
 
 import structlog
 
-from agentguard.core.models import Action, ActionType, Decision, Event, ProvenanceTag, RiskAssessment, derive_agent_id
-from agentguard.interceptor.action_types import (
-    infer_action_type,
-    is_credential_path,
-    extract_file_path,
+from agentguard.core.models import (
+    Action,
+    ActionType,
+    Decision,
+    Event,
+    ProvenanceTag,
+    RiskAssessment,
+    derive_agent_id,
 )
 from agentguard.hardening.approval import ApprovalAuthority, ApprovalError
 from agentguard.hardening.models import ActionApproval
 from agentguard.integrations.enrichment import get_enrichment_client
 from agentguard.integrations.stream import get_stream_publisher
+from agentguard.interceptor.action_types import (
+    extract_file_path,
+    infer_action_type,
+    is_credential_path,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -198,12 +206,11 @@ class Interceptor:
             # Fail-closed: an unhandled error in the pipeline must never silently
             # allow an action through. Block and log the error for investigation.
             latency_ms = (time.monotonic() - t_start) * 1000
-            log.error(
+            log.exception(
                 "intercept_pipeline_error",
                 error=str(exc),
                 error_type=type(exc).__name__,
                 latency_ms=f"{latency_ms:.1f}ms",
-                exc_info=True,
             )
             assessment = RiskAssessment(
                 risk_score=1.0,
@@ -564,8 +571,8 @@ class Interceptor:
                 confidence=insight.confidence,
             )
             if insight.attack_patterns:
-                from agentguard.taxonomy import lookup_by_attack_pattern
                 from agentguard.core.models import AttackTaxonomyAnnotation
+                from agentguard.taxonomy import lookup_by_attack_pattern
                 pattern = insight.attack_patterns[0]
                 mapping = lookup_by_attack_pattern(pattern)
                 annotation = AttackTaxonomyAnnotation(

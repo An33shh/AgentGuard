@@ -10,11 +10,10 @@ from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
 from agentguard.policy.schema import PolicyConfig
-from agentguard.proxy.format_handler import OpenAIFormatHandler, AnthropicFormatHandler
+from agentguard.proxy.format_handler import AnthropicFormatHandler, OpenAIFormatHandler
 from agentguard.proxy.models import ProxyRequestContext
 from agentguard.proxy.pipeline import ProxyPipeline
 from tests.conftest import MockAnalyzer
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -275,7 +274,7 @@ class TestFeatureFlags:
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]
         }
         handler = OpenAIFormatHandler()
-        response, status = await pipeline.handle_request(
+        response, _status = await pipeline.handle_request(
             body=request_body,
             upstream_headers={},
             handler=handler,
@@ -301,7 +300,7 @@ class TestFeatureFlags:
             "function": {"name": "bash", "arguments": '{"command": "rm -rf /"}'},
         }]}, "finish_reason": "tool_calls"}]}
         handler = OpenAIFormatHandler()
-        response, status = await pipeline.handle_request(
+        response, _status = await pipeline.handle_request(
             body=request_body,
             upstream_headers={},
             handler=handler,

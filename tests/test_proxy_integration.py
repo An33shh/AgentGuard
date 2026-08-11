@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -53,7 +55,7 @@ class TestProxyRequestContext:
         from agentguard.proxy.dependencies import extract_request_context
 
         class MockRequest:
-            headers = {
+            headers: ClassVar[dict] = {
                 "X-AgentGuard-Goal": "Read files",
                 "X-AgentGuard-Session": "sess-123",
                 "X-AgentGuard-AgentId": "agent-456",
@@ -72,7 +74,7 @@ class TestProxyRequestContext:
         from agentguard.proxy.dependencies import extract_request_context
 
         class MockRequest:
-            headers = {"Authorization": "Bearer sk-test-key-12345"}
+            headers: ClassVar[dict] = {"Authorization": "Bearer sk-test-key-12345"}
 
         config = ProxyConfig()
         ctx1 = extract_request_context(MockRequest(), config)
@@ -87,7 +89,7 @@ class TestProxyRequestContext:
         from agentguard.proxy.dependencies import extract_request_context
 
         class MockRequest:
-            headers: dict = {}
+            headers: ClassVar[dict] = {}
 
         config = ProxyConfig()
         ctx = extract_request_context(MockRequest(), config)

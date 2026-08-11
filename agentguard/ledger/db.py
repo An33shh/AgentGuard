@@ -3,26 +3,27 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     Float,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     TypeDecorator,
     case,
-    select,
     func,
+    select,
 )
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -66,7 +67,6 @@ class _FlexUUID(TypeDecorator):
         return uuid.UUID(str(value))
 
 import structlog
-
 from sqlalchemy import text as sa_text
 
 from agentguard.core.models import (
@@ -97,8 +97,8 @@ class SessionRecord(Base):
     session_id = Column(String(64), primary_key=True)
     agent_goal = Column(Text, nullable=False)
     framework = Column(String(64), nullable=False, default="unknown")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
     total_events = Column(Integer, nullable=False, default=0)
     blocked_events = Column(Integer, nullable=False, default=0)
 
@@ -286,10 +286,10 @@ class PostgresEventLedger(EventLedger):
         if max_risk is not None:
             query = query.where(EventRecord.risk_score <= max_risk)
         if since:
-            since_aware = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+            since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
             query = query.where(EventRecord.created_at >= since_aware)
         if until:
-            until_aware = until if until.tzinfo else until.replace(tzinfo=timezone.utc)
+            until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
             query = query.where(EventRecord.created_at <= until_aware)
         query = query.order_by(EventRecord.created_at.desc()).offset(offset).limit(limit)
         async with self._sessionmaker() as session:

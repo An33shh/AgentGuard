@@ -9,8 +9,8 @@ from typing import Any
 
 import structlog
 
-from agentguard.analyzer.intent_analyzer import IntentAnalyzer
 from agentguard.analyzer.backends import create_backend
+from agentguard.analyzer.intent_analyzer import IntentAnalyzer
 from agentguard.core.models import Decision, Event
 from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.db import PostgresEventLedger
@@ -75,7 +75,7 @@ class SecureAgent:
         analyzer_base_url: str | None = None,
         guardrail_mode: str | None = None,
         guardrail_deep_analysis: bool = False,
-    ) -> "SecureAgent":
+    ) -> SecureAgent:
         """
         Create a SecureAgent from environment variables.
 

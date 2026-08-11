@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import ClassVar
 
 import pytest
 
@@ -30,8 +31,8 @@ def flush_redis_rate_limit_keys():
             if keys:
                 client.delete(*keys)
             client.close()
-        except Exception:
-            pass  # Redis unavailable — tests use in-memory fallback
+        except Exception:  # noqa: S110 — Redis unavailable, tests use in-memory fallback
+            pass
     yield
 
 
@@ -72,12 +73,12 @@ def event_ledger() -> InMemoryEventLedger:
 
 
 @pytest.fixture
-def mock_analyzer() -> "MockAnalyzer":
+def mock_analyzer() -> MockAnalyzer:
     return MockAnalyzer()
 
 
 @pytest.fixture
-def interceptor(mock_analyzer: "MockAnalyzer", policy_engine: PolicyEngine, event_ledger: InMemoryEventLedger) -> Interceptor:
+def interceptor(mock_analyzer: MockAnalyzer, policy_engine: PolicyEngine, event_ledger: InMemoryEventLedger) -> Interceptor:
     return Interceptor(
         analyzer=mock_analyzer,
         policy_engine=policy_engine,
@@ -88,7 +89,7 @@ def interceptor(mock_analyzer: "MockAnalyzer", policy_engine: PolicyEngine, even
 class MockAnalyzer:
     """Mock analyzer that returns pre-defined risk scores based on tool/path."""
 
-    RISK_MAP: dict[str, float] = {
+    RISK_MAP: ClassVar[dict[str, float]] = {
         # Attack scenarios — keys are substrings matched against params + tool_name
         "ngrok": 0.92,
         "requestbin": 0.88,

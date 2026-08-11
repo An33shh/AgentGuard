@@ -31,12 +31,12 @@ CREDENTIAL_EXTENSIONS: set[str] = {".pem", ".key", ".p12", ".pfx", ".crt", ".cer
 
 # Tool name patterns → ActionType mapping
 _TOOL_TYPE_PATTERNS: list[tuple[re.Pattern[str], ActionType]] = [
-    (re.compile(r"^(bash|shell|subprocess|exec|run_command|terminal|sh)\b", re.I), ActionType.SHELL_COMMAND),
-    (re.compile(r"^(file\.write|write_file|save_file|create_file|append_file)\b", re.I), ActionType.FILE_WRITE),
-    (re.compile(r"^(file\.read|read_file|open_file|cat|read)\b", re.I), ActionType.FILE_READ),
-    (re.compile(r"^(http|requests?|curl|fetch|web_request|http_request|http_post|http_get)\b", re.I), ActionType.HTTP_REQUEST),
-    (re.compile(r"^(memory\.(write|set|update)|set_memory|update_memory)\b", re.I), ActionType.MEMORY_WRITE),
-    (re.compile(r"^(credential|secret|vault|keychain)\b", re.I), ActionType.CREDENTIAL_ACCESS),
+    (re.compile(r"^(bash|shell|subprocess|exec|run_command|terminal|sh)\b", re.IGNORECASE), ActionType.SHELL_COMMAND),
+    (re.compile(r"^(file\.write|write_file|save_file|create_file|append_file)\b", re.IGNORECASE), ActionType.FILE_WRITE),
+    (re.compile(r"^(file\.read|read_file|open_file|cat|read)\b", re.IGNORECASE), ActionType.FILE_READ),
+    (re.compile(r"^(http|requests?|curl|fetch|web_request|http_request|http_post|http_get)\b", re.IGNORECASE), ActionType.HTTP_REQUEST),
+    (re.compile(r"^(memory\.(write|set|update)|set_memory|update_memory)\b", re.IGNORECASE), ActionType.MEMORY_WRITE),
+    (re.compile(r"^(credential|secret|vault|keychain)\b", re.IGNORECASE), ActionType.CREDENTIAL_ACCESS),
 ]
 
 
@@ -71,10 +71,7 @@ def is_credential_path(path: str) -> bool:
             return True
 
     # Catch bare .env files (starts with dot — fnmatch "*.env" misses these)
-    if p.name == ".env" or p.name.endswith(".env"):
-        return True
-
-    return False
+    return bool(p.name == ".env" or p.name.endswith(".env"))
 
 
 def infer_action_type(tool_name: str, parameters: dict) -> ActionType:
@@ -120,15 +117,14 @@ def extract_url_domain(parameters: dict) -> str | None:
     """
     url_keys = ("url", "endpoint", "uri", "href")
     for key in url_keys:
-        if val := parameters.get(key):
-            if isinstance(val, str):
-                try:
-                    url = val if "://" in val else f"https://{val}"
-                    parsed = urlparse(url)
-                    # Use .hostname (not .netloc) to strip port number
-                    return parsed.hostname or None
-                except Exception:
-                    pass
+        if (val := parameters.get(key)) and isinstance(val, str):
+            try:
+                url = val if "://" in val else f"https://{val}"
+                parsed = urlparse(url)
+                # Use .hostname (not .netloc) to strip port number
+                return parsed.hostname or None
+            except Exception:  # noqa: S110 — malformed URL in one param, keep scanning others
+                pass
     return None
 
 
@@ -136,7 +132,6 @@ def extract_file_path(parameters: dict) -> str | None:
     """Extract file path from parameters."""
     path_keys = ("path", "file", "filename", "filepath", "file_path")
     for key in path_keys:
-        if val := parameters.get(key):
-            if isinstance(val, str):
-                return val
+        if (val := parameters.get(key)) and isinstance(val, str):
+            return val
     return None
