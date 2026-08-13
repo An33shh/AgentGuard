@@ -106,16 +106,22 @@ class TestIntentAnalyzerSuccess:
 
     @pytest.mark.asyncio
     async def test_risk_score_clamped_to_range(self) -> None:
-        """Risk score validator clamps within [0.0, 1.0] — Pydantic enforces bounds."""
-        import pydantic
+        """Risk score validator clamps within [0.0, 1.0] instead of raising.
 
+        Regression test: clamp_score used to be a default mode="after"
+        field_validator, which runs *after* Field(ge=0.0, le=1.0) has
+        already rejected any out-of-range value with a ValidationError — so
+        clamping never actually ran for the one case it exists to handle.
+        This test previously (incorrectly) asserted that out-of-range
+        scores raise, contradicting its own docstring/name. Now that
+        clamp_score runs with mode="before", it actually clamps."""
         from agentguard.core.models import RiskAssessment
 
-        with pytest.raises(pydantic.ValidationError):
-            RiskAssessment(risk_score=1.5, reason="test", indicators=[])
+        above_range = RiskAssessment(risk_score=1.5, reason="test", indicators=[])
+        assert above_range.risk_score == 1.0
 
-        with pytest.raises(pydantic.ValidationError):
-            RiskAssessment(risk_score=-0.5, reason="test", indicators=[])
+        below_range = RiskAssessment(risk_score=-0.5, reason="test", indicators=[])
+        assert below_range.risk_score == 0.0
 
         valid = RiskAssessment(risk_score=0.75, reason="test", indicators=[])
         assert valid.risk_score == 0.75

@@ -41,11 +41,15 @@ class AnthropicBackend(AnalyzerBackend):
         agent_goal: str,
         session_context: list[dict] | None = None,
     ) -> RiskAssessment:
-        response = await self._client.messages.create(
+        response = await self._client.messages.create(  # type: ignore[call-overload]
             model=self._model,
             max_tokens=512,
             system=SYSTEM_PROMPT,
             tools=[_TOOL],
+            # Plain dict literals for tool_choice/messages don't structurally
+            # match the SDK's TypedDict overloads without importing its exact
+            # param types — a known stub-strictness friction point, not a
+            # runtime issue (this call path is exercised in production).
             tool_choice={"type": "tool", "name": "assess_risk"},
             messages=[
                 {"role": "user", "content": build_user_prompt(action, agent_goal, session_context)}

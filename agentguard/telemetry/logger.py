@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import MutableMapping
 from contextvars import ContextVar
 from typing import Any
 
@@ -13,8 +14,8 @@ request_id_ctx_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 
 def _inject_request_id(
-    logger: Any, method: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
+    logger: Any, method: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     """Structlog processor that injects the current request_id."""
     event_dict["request_id"] = request_id_ctx_var.get()
     return event_dict
@@ -34,6 +35,7 @@ def configure_logging(log_level: str = "INFO", json_logs: bool = True) -> None:
         structlog.processors.StackInfoRenderer(),
     ]
 
+    renderer: structlog.types.Processor
     if json_logs:
         renderer = structlog.processors.JSONRenderer()
     else:
