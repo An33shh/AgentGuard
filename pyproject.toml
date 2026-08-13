@@ -39,7 +39,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "httpx>=0.27.2",
     "redis>=5.0.0",
-    "python-multipart>=0.0.18",
+    "python-multipart>=0.0.18",  # reserved for future file-upload endpoints (policy/log upload) — no route uses it yet
 ]
 
 [project.optional-dependencies]
@@ -54,6 +54,7 @@ dev       = [
     "pytest-mock>=3.14.0",
     "ruff==0.16.2",
     "mypy>=1.13.0",
+    "types-PyYAML>=6.0.0",
     "maturin>=1.5",
 ]
 
@@ -104,9 +105,20 @@ target-version = "py312"
 # benefit. Each site already documents why it's broad via an adjacent comment.
 ignore = ["BLE001"]
 
+[tool.mypy]
+# Permissive-first baseline: mypy was a listed dev dependency with no config
+# section at all (i.e. never actually running). This turns it on without
+# retrofitting strict typing onto an existing codebase in the same pass —
+# strict = true / disallow_untyped_defs is deferred to a follow-up once
+# there's a clean baseline to tighten from.
+python_version = "3.12"
+ignore_missing_imports = true
+files = ["agentguard", "api"]
+
 [tool.ruff.lint.per-file-ignores]
 # load_dotenv() must run before framework imports to populate env vars in time
 "api/main.py"             = ["E402"]
+"agentguard/proxy/app.py" = ["E402"]
 # Conditional SQLAlchemy dialect imports require deferred module-level imports
 "agentguard/ledger/db.py" = ["E402"]
 # FastAPI's dependency-injection pattern requires Depends()/Query() as argument

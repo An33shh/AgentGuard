@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Per-developer isolated branch-testing stack — never main's production compose
+docker-compose.branch-dev.yml
+
 # Python
 __pycache__/
 *.py[cod]
