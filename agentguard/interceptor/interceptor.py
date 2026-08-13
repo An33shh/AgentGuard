@@ -240,6 +240,46 @@ class Interceptor:
         approval = self._pending_approvals.get(approval_id)
         return approval.token if approval else None
 
+    def get_session_stats(self, session_id: str) -> dict[str, Any]:
+        """
+        Inspect a session's action/blocked counters and whether the
+        max_blocked session limit has demoted or locked it out.
+
+        session_limits.max_blocked has no time window or decay — once a
+        session's blocked count reaches it, evaluate_session_limits blocks
+        every subsequent action for that session_id forever, with no
+        automatic recovery. This (plus reset_session below) is the only way
+        to see or clear that state short of restarting the whole process,
+        which resets in-memory counters for every session, not just the
+        stuck one.
+        """
+        stats = self._session_stats.get(session_id, {"actions": 0, "blocked": 0})
+        limits = self._policy.config.session_limits
+        demotion = self._policy.config.demotion
+        return {
+            "session_id": session_id,
+            "actions": stats["actions"],
+            "blocked": stats["blocked"],
+            "max_actions": limits.max_actions,
+            "max_blocked": limits.max_blocked,
+            "locked_out": bool(limits.max_blocked and stats["blocked"] >= limits.max_blocked),
+            "demoted": bool(
+                demotion.enabled and stats["blocked"] >= demotion.trigger_blocked_count
+            ),
+        }
+
+    async def reset_session(self, session_id: str) -> bool:
+        """
+        Clear a session's action/blocked counters and history, lifting a
+        max_blocked lockout or demotion for it. Returns False if the
+        session had no recorded state to reset.
+        """
+        async with self._stats_lock:
+            existed = session_id in self._session_stats
+            self._session_stats.pop(session_id, None)
+            self._session_history.pop(session_id, None)
+        return existed
+
     async def verify_execution(
         self,
         approval_id: str,
@@ -386,7 +426,14 @@ class Interceptor:
             )
             asyncio.create_task(self._ledger.append(event))
             async with self._stats_lock:
-                self._session_stats[session_id]["actions"] += 1
+                # actions counter was already pre-incremented atomically in
+                # the session limit check above (step 2) — only blocked
+                # needs bumping here, matching the provenance-block and
+                # end-of-pipeline paths. Incrementing actions again here
+                # double-counted every ABAC block, inflating this session's
+                # actions count 2x per block and triggering
+                # session_limits.max_actions roughly twice as early as
+                # intended.
                 self._session_stats[session_id]["blocked"] += 1
             log.warning("action_blocked_abac", detail=abac_violation.detail)
             return Decision.BLOCK, event
@@ -428,8 +475,14 @@ class Interceptor:
         if decision == Decision.BLOCK and violation is not None:
             # Fast-path: blocked by deterministic rule, skip LLM call
             latency_ms = (time.monotonic() - t_start) * 1000
+            if violation.rule_type == "shell_destructive_pattern":
+                fast_path_score = self._policy.config.shell_command_policy.block_score
+            elif action.type == ActionType.CREDENTIAL_ACCESS:
+                fast_path_score = 0.95
+            else:
+                fast_path_score = 0.80
             assessment = RiskAssessment(
-                risk_score=0.95 if action.type == ActionType.CREDENTIAL_ACCESS else 0.80,
+                risk_score=fast_path_score,
                 reason=f"Policy rule '{violation.rule_name}' triggered: {violation.detail}",
                 indicators=[violation.rule_type],
                 is_goal_aligned=False,

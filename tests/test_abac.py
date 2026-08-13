@@ -57,6 +57,27 @@ class TestABAC:
         assert event.agent_is_registered is False
 
     @pytest.mark.asyncio
+    async def test_abac_block_increments_actions_exactly_once(self) -> None:
+        """Regression test: the session-limit check (step 2) pre-increments
+        `actions` for every request that isn't itself blocked by session
+        limits, and the ABAC-block path (step 3) once *also* incremented
+        `actions` on top of that — double-counting every ABAC block and
+        inflating the session's actions count 2x per block, triggering
+        session_limits.max_actions roughly twice as early as intended."""
+        interceptor = _make_interceptor(self._config())
+        session_id = "abac-actions-count-session"
+        decision, _ = await interceptor.intercept(
+            raw_payload={"tool_name": "git.push", "parameters": {}},
+            agent_goal="Deploy code",
+            session_id=session_id,
+            agent_id=None,  # unregistered — triggers the ABAC block
+        )
+        assert decision == Decision.BLOCK
+        stats = interceptor.get_session_stats(session_id)
+        assert stats["actions"] == 1
+        assert stats["blocked"] == 1
+
+    @pytest.mark.asyncio
     async def test_registered_agent_allowed_on_sensitive_tool(self) -> None:
         interceptor = _make_interceptor(self._config())
         decision, event = await interceptor.intercept(

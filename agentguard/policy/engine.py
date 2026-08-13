@@ -6,6 +6,7 @@ Full evaluation order (including interceptor-level checks):
   0. session_limits           → BLOCK (Interceptor, before any policy call)
   1. ABAC                     → BLOCK (Interceptor: evaluate_abac, deny_unregistered_tools)
   2. deny_tools               → BLOCK (evaluate)
+  2.5 shell_command_policy    → BLOCK destructive shell content, SHELL_COMMAND only (evaluate)
   3. allow_tools              → BLOCK if tool not in allowlist (evaluate)
   3.5 deny_provenance_sources → BLOCK (evaluate_provenance, MITRE ATLAS AML.T0054)
   4. deny_path_patterns       → BLOCK glob with ** support (evaluate)
@@ -14,18 +15,49 @@ Full evaluation order (including interceptor-level checks):
   7. review_tools             → REVIEW (evaluate)
   8. default                  → ALLOW (evaluate)
   9. risk_threshold           → BLOCK/REVIEW (evaluate_risk, after LLM analysis)
+
+Rule 2.5 (shell_command_policy) is deliberately content-aware rather than a
+blanket tool-name ban like deny_tools: it inspects the actual command string
+for objectively dangerous patterns (rm -rf, fork bombs, piping a remote
+fetch into a shell, etc. — see agentguard.analyzer.patterns's
+DESTRUCTIVE_SHELL category) instead of denying the "bash" tool outright.
+Anything that doesn't match still falls through to allow_tools and,
+eventually, LLM-based risk scoring — this is a fast lane for the obvious
+cases, not a replacement for semantic judgment on ambiguous ones. An
+operator who wants a categorical "no agent ever runs Bash" ban can still
+express that via deny_tools (unchanged, see policies/strict.yaml).
+
+Rules 2.5, 4, 5, and 6 (shell_command_policy, deny_path_patterns,
+credential_access, deny_domains) scan every string-valued parameter
+recursively (agentguard.interceptor.action_types.iter_all_string_values),
+NOT gated on the action's inferred ActionType. A pentest found the
+type-gated version of every one of these trivially bypassed by any
+tool/parameter naming outside infer_action_type()'s hardcoded lexicon
+(action_types.py's _SHELL_COMMAND_KEYS / path_keys / url_keys) — the action
+falls back to ActionType.TOOL_CALL, which none of the type-gated rules
+scrutinize at all. Classification is an inherently-defeatable heuristic
+(useful for descriptive/audit purposes and Rule 4's tool-name-driven
+credential_access trigger, which is additionally preserved); the actual
+BLOCK/ALLOW decision must not depend on it succeeding.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import os
+import posixpath
 import re
 
 import structlog
 
+from agentguard.analyzer.patterns import DetectionCategory, patterns_for
 from agentguard.core.models import Action, ActionType, Decision, PolicyViolation, ProvenanceTag
-from agentguard.interceptor.action_types import extract_file_path, extract_url_domain
+from agentguard.interceptor.action_types import (
+    extract_file_path,
+    is_credential_path,
+    iter_all_domains,
+    iter_all_string_values,
+)
 from agentguard.policy._native import RUST_AVAILABLE, build_native_matcher
 from agentguard.policy.schema import PolicyConfig, RuleAnnotation
 from agentguard.taxonomy import lookup_by_rule_type
@@ -103,26 +135,15 @@ def _glob_to_regex(pattern: str) -> str:
 _MAX_PATH_LEN = 4096
 
 
-def _path_matches(path: str, pattern: str) -> bool:
-    """
-    Match a file path against a glob pattern.
-
-    Supports:
-    - ~ expansion to the real home directory
-    - ** for any number of path segments
-    - * for any characters within a single segment
-    - ? for a single character
-    """
-    # Guard against ReDoS: adversarially long paths can cause quadratic
-    # backtracking in the ** glob regex. Real file paths are never this long.
-    if len(path) > _MAX_PATH_LEN:
-        return False
-    # Normalise separators and expand ~ in both sides
-    expanded_path = os.path.expanduser(path).replace("\\", "/").rstrip("/")
-    expanded_pattern = os.path.expanduser(pattern).replace("\\", "/").rstrip("/")
-
-    regex = _glob_to_regex(expanded_pattern)
-    return bool(re.fullmatch(regex, expanded_path))
+def _expand_path(path: str) -> str:
+    """Expand ~, normalise separators, and collapse ../ traversal segments
+    lexically. A pentest found deny_path_patterns/credential detection
+    trivially defeated by "/tmp/../etc/shadow"-shaped paths when this only
+    expanded ~ without resolving ".." — posixpath.normpath (not os.path,
+    since paths are always treated as POSIX-style here regardless of host
+    OS) collapses that before any pattern comparison happens."""
+    expanded = os.path.expanduser(path).replace("\\", "/")
+    return posixpath.normpath(expanded).rstrip("/") or "/"
 
 
 class PolicyEngine:
@@ -133,6 +154,7 @@ class PolicyEngine:
     """
 
     def __init__(self, config: PolicyConfig | None = None, path: str | None = None) -> None:
+        self._path: str | None
         if path:
             self._config = PolicyConfig.from_yaml(path)
             self._path = path
@@ -174,6 +196,7 @@ class PolicyEngine:
         self._provenance_patterns: list[re.Pattern[str]] = [
             re.compile(fnmatch.translate(p)) for p in (self._config.deny_provenance_sources or [])
         ]
+        self._shell_deny_patterns: list[re.Pattern[str]] = self._build_shell_deny_patterns()
         # Optional Rust fast-path: replaces Python regex loops when the native extension
         # is compiled and installed. Falls back to Python silently when unavailable.
         self._native = build_native_matcher(
@@ -187,6 +210,16 @@ class PolicyEngine:
         )
         if RUST_AVAILABLE:
             logger.debug("policy_engine_native_matcher_active")
+
+    def _build_shell_deny_patterns(self) -> list[re.Pattern[str]]:
+        """Compile shell_command_policy's deny patterns — the operator's own
+        explicit list if configured, else the built-in DESTRUCTIVE_SHELL set."""
+        cfg = self._config.shell_command_policy
+        if not cfg.enabled:
+            return []
+        if cfg.deny_patterns:
+            return [re.compile(p, re.IGNORECASE) for p in cfg.deny_patterns]
+        return [p.regex for p in patterns_for(DetectionCategory.DESTRUCTIVE_SHELL)]
 
     @classmethod
     def from_yaml(cls, path: str) -> PolicyEngine:
@@ -215,7 +248,16 @@ class PolicyEngine:
         """
         ra = self._config.rule_annotations or None
 
-        tool_lower = action.tool_name.lower()
+        # .strip(): fnmatch.translate-compiled patterns are effectively
+        # full-string matches (translate() end-anchors with \Z), so a tool
+        # name with incidental leading/trailing whitespace — "bash " — used
+        # to evade a deny_tools: ["bash"] rule entirely. A pentest found
+        # this; whether it's exploitable depends on the calling SDK treating
+        # "bash " and "bash" as the same tool for dispatch, but there's no
+        # legitimate reason for a real tool name to carry surrounding
+        # whitespace, so stripping here is a pure hardening with no
+        # downside for well-formed callers.
+        tool_lower = action.tool_name.strip().lower()
 
         # Rule 1: deny_tools
         if self._native:
@@ -228,6 +270,37 @@ class PolicyEngine:
                 f"Tool '{action.tool_name}' is in deny list",
                 Decision.BLOCK, ra,
             )
+
+        # Rule 1.5: shell_command_policy — content-aware destructive-command
+        # pre-screen. Deliberately does NOT deny the "bash" tool by name
+        # (that's what deny_tools is for, and it still runs first, above) —
+        # this inspects the actual command string. A non-match falls
+        # through to allow_tools/LLM scoring below, it is not treated as an
+        # implicit ALLOW.
+        #
+        # Scans every string-valued parameter, recursively into nested
+        # dicts/lists (iter_all_string_values), UNCONDITIONALLY — not gated
+        # on action.type == SHELL_COMMAND. A pentest found that gate itself
+        # a full bypass: infer_action_type() (action_types.py) only
+        # recognizes a hardcoded lexicon of tool-name prefixes and parameter
+        # keys (command/cmd/script); anything else — "input", "code",
+        # "args" are all real conventions across different agent frameworks
+        # — falls back to ActionType.TOOL_CALL, and this rule (gated on
+        # SHELL_COMMAND) then never even ran regardless of how dangerous
+        # the actual content was: {"tool_name": "run_task", "parameters":
+        # {"input": "rm -rf /"}} sailed through as ALLOW. Classification is
+        # an inherently-defeatable heuristic; enforcement must not depend
+        # on it succeeding. Mirrors LocalClassifier._params_contain_injection's
+        # already-proven approach to the identical problem.
+        if self._shell_deny_patterns:
+            for val in iter_all_string_values(action.parameters):
+                for pattern in self._shell_deny_patterns:
+                    if pattern.search(val):
+                        return Decision.BLOCK, _make_violation(
+                            "shell_command_policy", "shell_destructive_pattern",
+                            f"Command matches destructive shell pattern ({pattern.pattern!r})",
+                            Decision.BLOCK, ra,
+                        )
 
         # Rule 2: allow_tools — if configured, tool MUST be in the allowlist
         if self._allow_tool_patterns:
@@ -242,29 +315,49 @@ class PolicyEngine:
                     Decision.BLOCK, ra,
                 )
 
-        # Rule 3: deny_path_patterns (applies to file operations)
-        if action.type in (ActionType.FILE_READ, ActionType.FILE_WRITE, ActionType.CREDENTIAL_ACCESS):
-            path = extract_file_path(action.parameters)
-            if path and self._path_patterns:
+        # Rule 3: deny_path_patterns — scans every string-valued parameter
+        # (recursively), not gated on ActionType. Same classification-bypass
+        # class as Rule 1.5: {"target": "~/.ssh/id_rsa"} never classifies as
+        # FILE_READ (extract_file_path only recognizes path/file/filename/
+        # filepath/file_path keys), so the old type-gated version of this
+        # rule never ran regardless of the actual path.
+        if self._path_patterns:
+            for raw_val in iter_all_string_values(action.parameters):
+                if len(raw_val) > _MAX_PATH_LEN:
+                    continue
                 if self._native:
-                    matched_pattern = self._native.match_path(path)
+                    matched_pattern = self._native.match_path(raw_val)
                     if matched_pattern:
                         return Decision.BLOCK, _make_violation(
                             "deny_path_patterns", "path_blacklist",
-                            f"Path '{path}' matches deny pattern '{matched_pattern}'",
+                            f"Path '{raw_val}' matches deny pattern '{matched_pattern}'",
                             Decision.BLOCK, ra,
                         )
-                elif self._path_patterns and len(path) <= _MAX_PATH_LEN:
-                    expanded = os.path.expanduser(path).replace("\\", "/").rstrip("/")
+                else:
+                    expanded = _expand_path(raw_val)
                     for compiled, raw_pattern in self._path_patterns:
                         if compiled.fullmatch(expanded):
                             return Decision.BLOCK, _make_violation(
                                 "deny_path_patterns", "path_blacklist",
-                                f"Path '{path}' matches deny pattern '{raw_pattern}'",
+                                f"Path '{raw_val}' matches deny pattern '{raw_pattern}'",
                                 Decision.BLOCK, ra,
                             )
 
-        # Rule 4: Always block CREDENTIAL_ACCESS type (belt-and-suspenders)
+        # Rule 4: credential_access (belt-and-suspenders). Two independent
+        # triggers, both preserved from before this fix plus one new one:
+        #   (a) action.type == CREDENTIAL_ACCESS — classification already
+        #       caught it, either via a recognized path key+is_credential_path,
+        #       or via a tool-name pattern alone (credential/secret/vault/
+        #       keychain — _TOOL_TYPE_PATTERNS in action_types.py) even when
+        #       no parameter value looks path-shaped at all, e.g.
+        #       {"secret_name": "db-password"}. That tool-name signal isn't
+        #       otherwise derivable from scanning parameter values, so it's
+        #       kept as-is rather than folded into the scan below.
+        #   (b) NEW: any parameter value (recursively, any key) that matches
+        #       is_credential_path — same classification-bypass class as
+        #       Rules 1.5/3: {"target": "~/.ssh/id_rsa"} via a non-standard
+        #       key never classified as CREDENTIAL_ACCESS, so (a) alone
+        #       missed it.
         if action.type == ActionType.CREDENTIAL_ACCESS:
             path = extract_file_path(action.parameters)
             return Decision.BLOCK, _make_violation(
@@ -272,11 +365,20 @@ class PolicyEngine:
                 f"Credential path detected: {path or action.tool_name}",
                 Decision.BLOCK, ra,
             )
+        for raw_val in iter_all_string_values(action.parameters):
+            if len(raw_val) <= _MAX_PATH_LEN and is_credential_path(raw_val):
+                return Decision.BLOCK, _make_violation(
+                    "credential_access", "credential_pattern",
+                    f"Credential path detected: {raw_val}",
+                    Decision.BLOCK, ra,
+                )
 
-        # Rule 5: deny_domains
-        if action.type == ActionType.HTTP_REQUEST and self._domain_patterns:
-            domain = extract_url_domain(action.parameters)
-            if domain:
+        # Rule 5: deny_domains — scans every string-valued parameter
+        # (recursively) for URL/hostname-shaped content via iter_all_domains,
+        # not just url/endpoint/uri/href keys, and not gated on ActionType.
+        # Same classification-bypass class as Rules 1.5/3/4.
+        if self._domain_patterns or self._native:
+            for domain in iter_all_domains(action.parameters):
                 if self._native:
                     matched_domain_pat = self._native.match_domain(domain)
                     if matched_domain_pat:
@@ -327,7 +429,7 @@ class PolicyEngine:
         """
         if not is_registered and self._unregistered_tool_patterns:
             ra = self._config.rule_annotations or None
-            tool_lower = action.tool_name.lower()
+            tool_lower = action.tool_name.strip().lower()
             if self._native:
                 hit = self._native.match_unregistered_tool(tool_lower)
             else:
