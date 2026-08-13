@@ -1,11 +1,14 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Event, Decision } from "@/types";
 import { getRiskLevel } from "@/types";
 import { formatDate } from "@/lib/utils";
-import { searchEvents } from "@/lib/api";
+import { getEvents, searchEvents } from "@/lib/api";
+import type { EventsFilter } from "@/lib/api";
+import { EVENTS_PAGE_SIZE, EVENTS_POLL_INTERVAL_MS } from "@/lib/constants";
+import { useEventsFilterState } from "@/lib/useEventsFilterState";
 
 const DECISIONS: Decision[] = ["block", "review", "allow"];
 
@@ -39,69 +42,151 @@ function RiskCell({ score }: { score: number }) {
 
 interface EventTableProps {
   initialEvents: Event[];
+  initialFilters: EventsFilter;
 }
 
-export function EventTable({ initialEvents }: EventTableProps) {
+export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
   const router = useRouter();
-  const [decisionFilter, setDecisionFilter] = useState<Decision | "">("");
-  const [minRisk, setMinRisk] = useState<string>("");
-  const [search, setSearch] = useState<string>("");
-  const [searchResults, setSearchResults] = useState<Event[] | null>(null);
+  const { filters, setFilters } = useEventsFilterState();
+
+  const [events, setEvents] = useState<Event[]>(initialEvents);
+  const [offset, setOffset] = useState(initialEvents.length);
+  const [hasMore, setHasMore] = useState(initialEvents.length === EVENTS_PAGE_SIZE);
+  const [loading, setLoading] = useState(false);
+
+  const [sessionIdInput, setSessionIdInput] = useState(initialFilters.session_id ?? "");
+  const [search, setSearch] = useState("");
+  const [searchPending, setSearchPending] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isServerSearch, setIsServerSearch] = useState(false);
 
-  const isServerSearch = searchResults !== null;
-  const baseEvents = isServerSearch ? searchResults : initialEvents;
+  const offsetRef = useRef(offset);
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
 
-  const filtered = useMemo(() => {
-    const minRiskValue = minRisk === "" ? NaN : parseFloat(minRisk);
-    return baseEvents.filter((e) => {
-      if (decisionFilter && e.decision !== decisionFilter) return false;
-      if (!isNaN(minRiskValue) && e.assessment.risk_score < minRiskValue / 100) return false;
-      if (!isServerSearch && search) {
-        const q = search.toLowerCase();
-        return (
-          e.action.tool_name.toLowerCase().includes(q) ||
-          e.assessment.reason.toLowerCase().includes(q) ||
-          e.session_id.toLowerCase().includes(q)
-        );
+  // Debounced session_id filter — every other filter change is immediate
+  // (selects/date pickers don't need debouncing).
+  useEffect(() => {
+    const id = setTimeout(() => {
+      if (sessionIdInput !== (filters.session_id ?? "")) {
+        setFilters({ session_id: sessionIdInput || undefined });
       }
-      return true;
-    });
-  }, [baseEvents, decisionFilter, minRisk, search, isServerSearch]);
+    }, 400);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdInput]);
+
+  const refetchFirstPage = useCallback(
+    async (activeFilters: EventsFilter) => {
+      setLoading(true);
+      try {
+        const fresh = await getEvents({ ...activeFilters, limit: EVENTS_PAGE_SIZE, offset: 0 });
+        setEvents(fresh);
+        setOffset(fresh.length);
+        setHasMore(fresh.length === EVENTS_PAGE_SIZE);
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
+  // Refetch page 1 whenever the URL-driven filters change (session_id,
+  // decision, min/max risk, since/until) — every filter is server-applied,
+  // no client-side .filter() anywhere.
+  useEffect(() => {
+    if (isServerSearch) return;
+    refetchFirstPage(filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.agent_id, filters.session_id, filters.decision, filters.min_risk, filters.max_risk, filters.since, filters.until]);
+
+  const loadMore = useCallback(async () => {
+    if (loading || !hasMore || isServerSearch) return;
+    setLoading(true);
+    try {
+      const next = await getEvents({ ...filters, limit: EVENTS_PAGE_SIZE, offset: offsetRef.current });
+      setEvents((prev) => [...prev, ...next]);
+      setOffset((prev) => prev + next.length);
+      setHasMore(next.length === EVENTS_PAGE_SIZE);
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, hasMore, isServerSearch, filters]);
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (isServerSearch) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [isServerSearch, loadMore]);
+
+  // Own poll, not router.refresh() — a fresh SSR render would clobber the
+  // client-owned accumulated infinite-scroll state. Only refetches page 1,
+  // and only when the user hasn't scrolled past it or entered search mode.
+  useEffect(() => {
+    if (isServerSearch) return;
+    const id = setInterval(() => {
+      if (document.visibilityState !== "visible" || offsetRef.current > EVENTS_PAGE_SIZE) return;
+      getEvents({ ...filters, limit: EVENTS_PAGE_SIZE, offset: 0 })
+        .then((fresh) => {
+          setEvents(fresh);
+          setOffset(fresh.length);
+          setHasMore(fresh.length === EVENTS_PAGE_SIZE);
+        })
+        .catch(() => {
+          /* stale data over a broken poll */
+        });
+    }, EVENTS_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isServerSearch, filters.agent_id, filters.session_id, filters.decision, filters.min_risk, filters.max_risk, filters.since, filters.until]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const q = search.trim();
     if (!q) {
-      setSearchResults(null);
+      setIsServerSearch(false);
       setSearchError(null);
       return;
     }
-    startTransition(async () => {
-      setSearchError(null);
-      try {
-        const data = await searchEvents(q, 200);
-        setSearchResults(data);
-      } catch (err) {
+    setSearchPending(true);
+    setSearchError(null);
+    searchEvents(q, filters, 200)
+      .then((data) => {
+        setEvents(data);
+        setIsServerSearch(true);
+      })
+      .catch((err) => {
         setSearchError(err instanceof Error ? err.message : "Search failed");
-        setSearchResults(null);
-      }
-    });
+        setIsServerSearch(false);
+      })
+      .finally(() => setSearchPending(false));
   };
 
-  const handleClear = () => {
+  const handleClearSearch = () => {
     setSearch("");
-    setSearchResults(null);
+    setIsServerSearch(false);
     setSearchError(null);
+    refetchFirstPage(filters);
   };
 
   const inputClass =
     "bg-[#141F33] border border-[#1C2844] rounded-lg px-3 py-2 text-sm text-[#A0AEBB] placeholder-[#3A4A5C] focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-colors";
 
+  const toLocalInputValue = (iso?: string) => (iso ? iso.slice(0, 16) : "");
+
   return (
     <div className="space-y-4">
-      {/* Filters */}
+      {/* Search */}
       <form onSubmit={handleSearch} className="flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-48">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#484F58] pointer-events-none">
@@ -112,38 +197,46 @@ export function EventTable({ initialEvents }: EventTableProps) {
           </span>
           <input
             type="text"
-            placeholder="Search tools, reasons, sessions…"
+            placeholder="Full-text search reasons…"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
-              if (!e.target.value.trim()) {
-                setSearchResults(null);
-                setSearchError(null);
-              }
+              if (!e.target.value.trim() && isServerSearch) handleClearSearch();
             }}
             className={`${inputClass} w-full pl-8`}
           />
         </div>
         <button
           type="submit"
-          disabled={isPending || !search.trim()}
+          disabled={searchPending || !search.trim()}
           className="px-3 py-2 rounded-lg bg-indigo-600/80 text-white text-xs font-medium hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
-          {isPending ? "…" : "Search"}
+          {searchPending ? "…" : "Search"}
         </button>
         {isServerSearch && (
           <button
             type="button"
-            onClick={handleClear}
+            onClick={handleClearSearch}
             className="px-3 py-2 rounded-lg border border-[#1C2844] text-[#6E7D91] text-xs hover:text-[#A0AEBB] hover:border-[#2C3854] transition-colors"
           >
             Clear
           </button>
         )}
+      </form>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <input
+          type="text"
+          placeholder="Filter by session_id…"
+          value={sessionIdInput}
+          onChange={(e) => setSessionIdInput(e.target.value)}
+          className={`${inputClass} w-56`}
+        />
         <select
-          value={decisionFilter}
-          onChange={(e) => setDecisionFilter(e.target.value as Decision | "")}
-          className={`${inputClass} bg-[#141F33]`}
+          value={filters.decision ?? ""}
+          onChange={(e) => setFilters({ decision: (e.target.value || undefined) as Decision | undefined })}
+          className={`${inputClass}`}
         >
           <option value="">All Decisions</option>
           {DECISIONS.map((d) => (
@@ -153,21 +246,42 @@ export function EventTable({ initialEvents }: EventTableProps) {
         <input
           type="number"
           placeholder="Min risk %"
-          value={minRisk}
-          onChange={(e) => setMinRisk(e.target.value)}
+          value={filters.min_risk !== undefined ? Math.round(filters.min_risk * 100) : ""}
+          onChange={(e) => setFilters({ min_risk: e.target.value === "" ? undefined : Number(e.target.value) / 100 })}
           min={0}
           max={100}
           className={`${inputClass} w-28`}
         />
+        <input
+          type="number"
+          placeholder="Max risk %"
+          value={filters.max_risk !== undefined ? Math.round(filters.max_risk * 100) : ""}
+          onChange={(e) => setFilters({ max_risk: e.target.value === "" ? undefined : Number(e.target.value) / 100 })}
+          min={0}
+          max={100}
+          className={`${inputClass} w-28`}
+        />
+        <input
+          type="datetime-local"
+          value={toLocalInputValue(filters.since)}
+          onChange={(e) => setFilters({ since: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
+          className={`${inputClass}`}
+        />
+        <input
+          type="datetime-local"
+          value={toLocalInputValue(filters.until)}
+          onChange={(e) => setFilters({ until: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
+          className={`${inputClass}`}
+        />
         <div className="flex items-center gap-2 text-xs text-[#484F58] tabular-nums">
-          <span>{filtered.length} events</span>
+          <span>{events.length}{hasMore && !isServerSearch ? "+" : ""} events</span>
           {isServerSearch && (
             <span className="px-1.5 py-0.5 rounded bg-indigo-600/15 text-indigo-400 border border-indigo-600/20 font-mono">
               fulltext
             </span>
           )}
         </div>
-      </form>
+      </div>
 
       {searchError && (
         <div className="bg-[#F85149]/8 border border-[#F85149]/20 rounded-xl p-3 text-sm text-[#F85149]">
@@ -189,14 +303,14 @@ export function EventTable({ initialEvents }: EventTableProps) {
             </tr>
           </thead>
           <tbody className="divide-y divide-[#1C2844]">
-            {filtered.length === 0 && (
+            {events.length === 0 && !loading && (
               <tr>
                 <td colSpan={6} className="text-center py-12 text-[#484F58] text-sm">
                   No events match your filters.
                 </td>
               </tr>
             )}
-            {filtered.map((event) => (
+            {events.map((event) => (
               <tr
                 key={event.event_id}
                 onClick={() => router.push(`/events/${event.event_id}`)}
@@ -226,6 +340,11 @@ export function EventTable({ initialEvents }: EventTableProps) {
             ))}
           </tbody>
         </table>
+        {!isServerSearch && hasMore && (
+          <div ref={sentinelRef} className="py-4 text-center text-xs text-[#484F58]">
+            {loading ? "Loading more…" : ""}
+          </div>
+        )}
       </div>
     </div>
   );

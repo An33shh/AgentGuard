@@ -1,9 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useMemo, useCallback, useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { AgentGraphData, GraphNode } from "@/types";
+import { timelineUrl } from "@/lib/urls";
 
 // react-force-graph-2d touches `window` at import time, so it can only render
 // after client-side mount. useSyncExternalStore (server snapshot: false,
@@ -166,6 +168,14 @@ function NodeInfoPanel({ node, onClose }: { node: NodeCanvasObj; onClose: () => 
           <p>A single task run by this agent. Multiple sessions show repeated or persistent activity over time.</p>
           <p className="font-mono text-[#484F58] break-all">{node.session_id}</p>
           {node.timestamp && <p className="text-[#484F58]">{new Date(node.timestamp).toLocaleString()}</p>}
+          {node.session_id && (
+            <Link
+              href={timelineUrl(node.session_id)}
+              className="inline-block text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+            >
+              View session timeline →
+            </Link>
+          )}
         </div>
       )}
 
@@ -269,14 +279,23 @@ export function KnowledgeGraph({ data, height = 500 }: KnowledgeGraphProps) {
     return () => window.removeEventListener("keydown", h);
   }, [fullscreen]);
 
+  // Effective height: dims.h is only ever kept current while fullscreen
+  // (updated by the window-resize effect below); the non-fullscreen
+  // ResizeObserver effect above only ever tracks width, not height, so
+  // reading dims.h outside fullscreen would return whatever window height
+  // was last seen during a previous fullscreen session instead of the
+  // height prop. Deriving it here means there's no stale state to reset
+  // when exiting fullscreen.
+  const displayHeight = fullscreen ? dims.h : height;
+
   // Draw starfield background whenever dims change
   useEffect(() => {
     const canvas = bgCanvasRef.current;
     if (!canvas || dims.w === 0) return;
     canvas.width  = dims.w;
-    canvas.height = dims.h;
+    canvas.height = displayHeight;
     drawStarfield(canvas);
-  }, [dims]);
+  }, [dims, displayHeight]);
 
   const graphData = useMemo(() => ({
     nodes: data.nodes.map((n) => ({ ...n })),
@@ -349,7 +368,7 @@ export function KnowledgeGraph({ data, height = 500 }: KnowledgeGraphProps) {
           <canvas
             ref={bgCanvasRef}
             className="absolute inset-0 pointer-events-none"
-            style={{ width: dims.w, height: dims.h }}
+            style={{ width: dims.w, height: displayHeight }}
           />
 
           {/* ── Top bar ── */}
@@ -401,7 +420,7 @@ export function KnowledgeGraph({ data, height = 500 }: KnowledgeGraphProps) {
             <ForceGraph2D
               graphData={graphData}
               width={dims.w}
-              height={dims.h}
+              height={displayHeight}
               backgroundColor="transparent"
               nodeCanvasObject={nodeCanvasObject}
               nodeCanvasObjectMode={() => "replace"}

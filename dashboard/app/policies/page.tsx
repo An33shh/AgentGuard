@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Editor from "@monaco-editor/react";
 import { getRawPolicy, validatePolicy, savePolicy } from "@/lib/api";
+import { PolicySummary } from "@/components/policies/PolicySummary";
 
 type Status = { type: "success" | "error"; message: string } | null;
 
@@ -13,6 +14,7 @@ export default function PoliciesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     getRawPolicy()
@@ -43,6 +45,7 @@ export default function PoliciesPage() {
     try {
       const res = await savePolicy(yaml);
       setStatus({ type: "success", message: `Saved and reloaded: "${res.policy_name}"` });
+      setRefreshKey((k) => k + 1);
     } catch (e: unknown) {
       setStatus({ type: "error", message: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -86,6 +89,8 @@ export default function PoliciesPage() {
           {status.message}
         </div>
       )}
+
+      <PolicySummary refreshKey={refreshKey} />
 
       <div className="rounded-xl overflow-hidden border border-[#1C2844]">
         {loading ? (

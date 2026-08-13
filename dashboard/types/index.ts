@@ -76,6 +76,15 @@ export interface Event {
   framework: string;
 }
 
+export interface SessionSummary {
+  session_id: string;
+  agent_goal: string;
+  framework: string;
+  total_events: number;
+  blocked_events: number;
+  updated_at: string;
+}
+
 export interface TimelineSummary {
   session_id: string;
   total_events: number;
@@ -98,6 +107,30 @@ export interface Stats {
   avg_risk_score: number;
 }
 
+export interface Insight {
+  event_id: string;
+  analysis: string;
+  attack_patterns: string[];
+  confidence: number;
+  severity: RiskLevel;
+  recommended_action: string;
+  false_positive_likelihood: number;
+  created_at: string;
+}
+
+export interface PolicyRuleAnnotation {
+  mitre_atlas_ids: string[];
+  owasp_categories: string[];
+  notes: string;
+}
+
+export interface PolicyDemotionConfig {
+  enabled: boolean;
+  trigger_blocked_count: number;
+  demoted_risk_threshold: number;
+  demoted_review_threshold: number;
+}
+
 export interface PolicyConfig {
   name: string;
   risk_threshold: number;
@@ -111,6 +144,10 @@ export interface PolicyConfig {
     max_actions: number;
     max_blocked: number;
   };
+  deny_unregistered_tools: string[];
+  deny_provenance_sources: string[];
+  demotion: PolicyDemotionConfig;
+  rule_annotations: Record<string, PolicyRuleAnnotation>;
 }
 
 export interface AgentProfile {
@@ -187,3 +224,14 @@ export function getDecisionColor(decision: Decision): string {
     case "review": return "text-yellow-600 bg-yellow-50";
   }
 }
+
+// Canonical risk/severity color tokens for the dashboard's dark theme —
+// new code should use this instead of hand-rolling its own {bg,border,text}
+// record (several existing components predate this and aren't retrofitted
+// here; that's a separate, unrequested cleanup).
+export const RISK_STYLES: Record<RiskLevel, { text: string; bg: string; border: string }> = {
+  low:      { text: "#3FB950", bg: "rgba(63,185,80,0.1)",  border: "rgba(63,185,80,0.2)" },
+  medium:   { text: "#D29922", bg: "rgba(210,153,34,0.1)", border: "rgba(210,153,34,0.2)" },
+  high:     { text: "#F85149", bg: "rgba(248,81,73,0.1)",  border: "rgba(248,81,73,0.2)" },
+  critical: { text: "#F85149", bg: "rgba(248,81,73,0.15)", border: "rgba(248,81,73,0.35)" },
+};

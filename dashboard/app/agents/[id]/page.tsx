@@ -1,19 +1,23 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getAgent, getAgentGraph } from "@/lib/api";
+import { ApiError, getAgent, getAgentGraph } from "@/lib/api";
 import { KnowledgeGraph } from "@/components/agents/KnowledgeGraph";
 import { RiskTrendSparkline } from "@/components/agents/RiskTrendSparkline";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { WidgetError } from "@/components/ui/WidgetError";
 import { getRiskLevel } from "@/types";
 import { formatDate } from "@/lib/utils";
+import { eventsUrl } from "@/lib/urls";
 import type { AgentProfile, AgentGraphData } from "@/types";
 
-function StatPill({ label, value, danger }: { label: string; value: string | number; danger?: boolean }) {
-  return (
-    <div className={`bg-[#0A1120] border rounded-lg p-3 text-center ${danger ? "border-red-900/20" : "border-[#1C2844]"}`}>
+function StatPill({ label, value, danger, href }: { label: string; value: string | number; danger?: boolean; href?: string }) {
+  const content = (
+    <div className={`bg-[#0A1120] border rounded-lg p-3 text-center ${danger ? "border-red-900/20" : "border-[#1C2844]"} ${href ? "hover:border-indigo-500/40 transition-colors cursor-pointer" : ""}`}>
       <p className={`text-lg font-bold tabular-nums ${danger ? "text-[#F85149]" : "text-[#E6EDF3]"}`}>{value}</p>
       <p className="text-xs text-[#484F58] mt-0.5">{label}</p>
     </div>
   );
+  return href ? <Link href={href}>{content}</Link> : content;
 }
 
 function RiskGauge({ score }: { score: number }) {
@@ -44,15 +48,25 @@ export default async function AgentDetailPage({ params }: AgentDetailPageProps) 
   const agentId = decodeURIComponent(id);
 
   let profile: AgentProfile;
-  let graph: AgentGraphData;
-
   try {
-    [profile, graph] = await Promise.all([
-      getAgent(agentId),
-      getAgentGraph(agentId),
-    ]);
+    profile = await getAgent(agentId);
+  } catch (e) {
+    if (e instanceof ApiError && e.errorCode === "NOT_FOUND") notFound();
+    return (
+      <ErrorState
+        title="Couldn't load this agent"
+        message={e instanceof ApiError ? e.message : "The AgentGuard API is unreachable."}
+        retryHref={`/agents/${id}`}
+      />
+    );
+  }
+
+  let graph: AgentGraphData = { nodes: [], edges: [] };
+  let graphError = false;
+  try {
+    graph = await getAgentGraph(agentId);
   } catch {
-    notFound();
+    graphError = true;
   }
 
   const blockRate =
@@ -99,10 +113,10 @@ export default async function AgentDetailPage({ params }: AgentDetailPageProps) 
 
       {/* Stats */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
-        <StatPill label="Total Events" value={profile.total_events} />
-        <StatPill label="Blocked" value={profile.blocked_events} danger={profile.blocked_events > 0} />
-        <StatPill label="Reviewed" value={profile.reviewed_events} />
-        <StatPill label="Allowed" value={profile.allowed_events} />
+        <StatPill label="Total Events" value={profile.total_events} href={eventsUrl({ agent_id: profile.agent_id })} />
+        <StatPill label="Blocked" value={profile.blocked_events} danger={profile.blocked_events > 0} href={eventsUrl({ agent_id: profile.agent_id, decision: "block" })} />
+        <StatPill label="Reviewed" value={profile.reviewed_events} href={eventsUrl({ agent_id: profile.agent_id, decision: "review" })} />
+        <StatPill label="Allowed" value={profile.allowed_events} href={eventsUrl({ agent_id: profile.agent_id, decision: "allow" })} />
         <StatPill label="Block Rate" value={`${blockRate}%`} danger={parseFloat(blockRate) > 50} />
         <StatPill label="Sessions" value={profile.total_sessions} />
       </div>
@@ -120,30 +134,34 @@ export default async function AgentDetailPage({ params }: AgentDetailPageProps) 
       </div>
 
       {/* Knowledge Graph */}
-      <div className="bg-[#0C1220] border border-[#1C2844] rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-[#E6EDF3]">Knowledge Graph</h2>
-            <p className="text-xs text-[#484F58] mt-0.5">
-              {graph.nodes.length} nodes · {graph.edges.length} edges
-            </p>
+      {graphError ? (
+        <WidgetError message="Knowledge graph unavailable" />
+      ) : (
+        <div className="bg-[#0C1220] border border-[#1C2844] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-[#E6EDF3]">Knowledge Graph</h2>
+              <p className="text-xs text-[#484F58] mt-0.5">
+                {graph.nodes.length} nodes · {graph.edges.length} edges
+              </p>
+            </div>
+            <div className="flex gap-4 text-xs text-[#484F58]">
+              {[
+                { color: "bg-indigo-400", label: "agent" },
+                { color: "bg-sky-400", label: "session" },
+                { color: "bg-emerald-400", label: "tool" },
+                { color: "bg-[#F85149]", label: "attack" },
+              ].map(({ color, label }) => (
+                <span key={label} className="flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${color} inline-block`} />
+                  {label}
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="flex gap-4 text-xs text-[#484F58]">
-            {[
-              { color: "bg-indigo-400", label: "agent" },
-              { color: "bg-sky-400", label: "session" },
-              { color: "bg-emerald-400", label: "tool" },
-              { color: "bg-[#F85149]", label: "attack" },
-            ].map(({ color, label }) => (
-              <span key={label} className="flex items-center gap-1.5">
-                <span className={`w-1.5 h-1.5 rounded-full ${color} inline-block`} />
-                {label}
-              </span>
-            ))}
-          </div>
+          <KnowledgeGraph data={graph} height={520} />
         </div>
-        <KnowledgeGraph data={graph} height={520} />
-      </div>
+      )}
 
       {/* Attack Patterns + Tools */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

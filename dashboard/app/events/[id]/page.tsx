@@ -1,10 +1,13 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getEvent } from "@/lib/api";
+import { ApiError, getEvent } from "@/lib/api";
 import { getRiskLevel } from "@/types";
 import { formatDate } from "@/lib/utils";
+import { Panel } from "@/components/ui/Panel";
+import { ErrorState } from "@/components/ui/ErrorState";
 import { ProvenancePanel } from "@/components/events/ProvenancePanel";
 import { ThreatTaxonomyPanel } from "@/components/events/ThreatTaxonomyPanel";
+import type { Event } from "@/types";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -39,15 +42,6 @@ function formatActionType(raw: string): string {
   return raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-[#0C1220] rounded-xl border border-[#1C2844] p-6">
-      <h2 className="text-xs font-semibold text-[#6E7D91] uppercase tracking-wider mb-5">{title}</h2>
-      {children}
-    </div>
-  );
-}
-
 function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
@@ -59,8 +53,20 @@ function Field({ label, value, mono = false }: { label: string; value: string; m
 
 export default async function EventDetailPage({ params }: Props) {
   const { id } = await params;
-  const event = await getEvent(id).catch(() => null);
-  if (!event) notFound();
+
+  let event: Event;
+  try {
+    event = await getEvent(id);
+  } catch (e) {
+    if (e instanceof ApiError && e.errorCode === "NOT_FOUND") notFound();
+    return (
+      <ErrorState
+        title="Couldn't load this event"
+        message={e instanceof ApiError ? e.message : "The AgentGuard API is unreachable."}
+        retryHref={`/events/${id}`}
+      />
+    );
+  }
 
   const showGoalAligned = event.assessment.analyzer_model !== "policy_engine";
 

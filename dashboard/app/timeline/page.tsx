@@ -1,7 +1,8 @@
-import { getSessions, getTimeline, getTimelineSummary } from "@/lib/api";
+import { getSessionSummaries, getTimeline, getTimelineSummary } from "@/lib/api";
 import { TimelineView } from "@/components/timeline/TimelineView";
 import { SessionSelector } from "@/components/timeline/SessionSelector";
-import type { Event, TimelineSummary } from "@/types";
+import { formatDate } from "@/lib/utils";
+import type { Event, SessionSummary, TimelineSummary } from "@/types";
 
 interface Props {
   searchParams: Promise<{ session_id?: string }>;
@@ -10,14 +11,14 @@ interface Props {
 export default async function TimelinePage({ searchParams }: Props) {
   const { session_id } = await searchParams;
 
-  let sessions: string[] = [];
+  let sessions: SessionSummary[] = [];
   let events: Event[] = [];
   let summary: TimelineSummary | null = null;
   let apiError = false;
 
   try {
-    sessions = await getSessions();
-    const active = session_id || sessions[0];
+    sessions = await getSessionSummaries();
+    const active = session_id || sessions[0]?.session_id;
     if (active) {
       [events, summary] = await Promise.all([
         getTimeline(active),
@@ -28,7 +29,7 @@ export default async function TimelinePage({ searchParams }: Props) {
     apiError = true;
   }
 
-  const activeSession = session_id || sessions[0];
+  const activeSession = session_id || sessions[0]?.session_id;
 
   return (
     <div className="space-y-6">
@@ -65,6 +66,29 @@ export default async function TimelinePage({ searchParams }: Props) {
               </p>
             </div>
           ))}
+        </div>
+      )}
+
+      {summary && (summary.start_time || summary.attack_vectors.length > 0) && (
+        <div className="bg-[#0C1220] border border-[#1C2844] rounded-xl p-4 space-y-3">
+          {summary.start_time && summary.end_time && (
+            <p className="text-xs text-[#484F58]">
+              <span className="text-[#6E7D91]">Session window:</span>{" "}
+              {formatDate(summary.start_time)} → {formatDate(summary.end_time)}
+            </p>
+          )}
+          {summary.attack_vectors.length > 0 && (
+            <div>
+              <p className="text-xs text-[#484F58] uppercase tracking-wider mb-2">Attack Vectors</p>
+              <div className="flex flex-wrap gap-1.5">
+                {summary.attack_vectors.map((v) => (
+                  <span key={v} className="text-xs px-2 py-0.5 bg-[#F85149]/8 text-[#F85149]/80 rounded border border-[#F85149]/15 font-mono">
+                    {v.replace(/_/g, " ")}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
