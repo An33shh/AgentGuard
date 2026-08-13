@@ -6,8 +6,10 @@ import pytest
 
 from agentguard.adapters.langgraph_adapter import LangGraphAdapter
 from agentguard.adapters.openai_adapter import AgentGuardOpenAIHooks
+from agentguard.adapters.openclaw import OpenClawAdapter
 from agentguard.core.exceptions import AgentGuardError, BlockedByAgentGuard
 from agentguard.core.models import Decision
+from agentguard.core.secure_agent import SecureAgent
 from agentguard.guardrail.guardrail import PromptGuardrail
 from agentguard.guardrail.models import GuardrailConfig, GuardrailMode
 from agentguard.interceptor.interceptor import Interceptor
@@ -35,6 +37,22 @@ def secure_interceptor() -> Interceptor:
         deny_tools=["bash"],
         deny_path_patterns=["~/.ssh/**", "~/.aws/credentials"],
         deny_domains=["*.ngrok.io"],
+    ))
+    ledger = InMemoryEventLedger()
+    return Interceptor(analyzer=analyzer, policy_engine=policy, event_ledger=ledger)
+
+
+@pytest.fixture
+def abac_interceptor() -> Interceptor:
+    """Interceptor whose policy ABAC-blocks a specific tool for any caller
+    that arrives without an explicit agent_id — used to prove agent_id
+    registration actually reaches enforcement, not just that it's accepted
+    as a constructor param."""
+    analyzer = MockAnalyzer()
+    policy = PolicyEngine(config=PolicyConfig(
+        name="abac-test",
+        risk_threshold=0.75,
+        deny_unregistered_tools=["restricted_tool"],
     ))
     ledger = InMemoryEventLedger()
     return Interceptor(analyzer=analyzer, policy_engine=policy, event_ledger=ledger)
@@ -287,3 +305,172 @@ class TestLangGraphAdapter:
         # bash is in deny_tools — should return blocked message instead of raising
         result = await wrapped(command="rm -rf /")
         assert "BLOCKED" in str(result).upper()
+
+
+# ---------------------------------------------------------------------------
+# agent_id registration — every adapter must thread it through to
+# Interceptor.intercept() so ABAC's deny_unregistered_tools actually sees it.
+# ---------------------------------------------------------------------------
+
+class TestOpenAIHooksRegistration:
+    @pytest.mark.asyncio
+    async def test_registered_agent_bypasses_abac_unregistered_block(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        hooks = AgentGuardOpenAIHooks(
+            interceptor=abac_interceptor,
+            agent_goal="Do restricted things",
+            session_id="openai-registered",
+            agent_id="my-registered-agent",
+        )
+        tool = _MockTool("restricted_tool", {})
+        ctx = _MockContext({})
+        # Should not raise BlockedByAgentGuard from the ABAC rule.
+        await hooks.on_tool_start(ctx, _MockAgent(), tool)
+
+    @pytest.mark.asyncio
+    async def test_unregistered_agent_still_hits_abac_block(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        hooks = AgentGuardOpenAIHooks(
+            interceptor=abac_interceptor,
+            agent_goal="Do restricted things",
+            session_id="openai-unregistered",
+        )
+        tool = _MockTool("restricted_tool", {})
+        ctx = _MockContext({})
+        with pytest.raises(BlockedByAgentGuard):
+            await hooks.on_tool_start(ctx, _MockAgent(), tool)
+
+
+class TestLangGraphAdapterRegistration:
+    @pytest.mark.asyncio
+    async def test_registered_agent_bypasses_abac_unregistered_block(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        adapter = LangGraphAdapter(
+            interceptor=abac_interceptor,
+            agent_goal="Do restricted things",
+            session_id="langgraph-registered",
+            agent_id="my-registered-agent",
+        )
+        await adapter.before_tool_call("restricted_tool", {})
+
+    @pytest.mark.asyncio
+    async def test_unregistered_agent_still_hits_abac_block(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        adapter = LangGraphAdapter(
+            interceptor=abac_interceptor,
+            agent_goal="Do restricted things",
+            session_id="langgraph-unregistered",
+        )
+        with pytest.raises(BlockedByAgentGuard):
+            await adapter.before_tool_call("restricted_tool", {})
+
+
+class TestOpenClawAdapterRegistration:
+    """OpenClawAdapter is the reference implementation the other two
+    adapters were made to match — but it had zero dedicated test coverage
+    for this behavior before now."""
+
+    @pytest.mark.asyncio
+    async def test_registered_agent_bypasses_abac_unregistered_block(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        adapter = OpenClawAdapter(
+            interceptor=abac_interceptor,
+            agent_goal="Do restricted things",
+            session_id="openclaw-registered",
+            agent_id="my-registered-agent",
+        )
+        await adapter.before_tool_call("restricted_tool", {})
+
+    @pytest.mark.asyncio
+    async def test_unregistered_agent_still_hits_abac_block(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        adapter = OpenClawAdapter(
+            interceptor=abac_interceptor,
+            agent_goal="Do restricted things",
+            session_id="openclaw-unregistered",
+        )
+        with pytest.raises(BlockedByAgentGuard):
+            await adapter.before_tool_call("restricted_tool", {})
+
+
+class TestSecureAgentFacadePropagation:
+    """Regression coverage for the second-layer bug: SecureAgent carried
+    self._agent_id correctly but its get_openai_hooks()/get_langgraph_adapter()
+    facade methods silently dropped it when constructing the adapters."""
+
+    @pytest.mark.asyncio
+    async def test_openai_hooks_inherit_facade_agent_id(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        guard = SecureAgent(
+            agent_goal="Do restricted things",
+            interceptor=abac_interceptor,
+            ledger=InMemoryEventLedger(),
+            agent_id="facade-registered-agent",
+            session_id="secure-agent-openai",
+        )
+        hooks = guard.get_openai_hooks()
+        assert hooks._agent_id == "facade-registered-agent"
+        tool = _MockTool("restricted_tool", {})
+        ctx = _MockContext({})
+        await hooks.on_tool_start(ctx, _MockAgent(), tool)
+
+    @pytest.mark.asyncio
+    async def test_langgraph_adapter_inherits_facade_agent_id(
+        self, abac_interceptor: Interceptor
+    ) -> None:
+        guard = SecureAgent(
+            agent_goal="Do restricted things",
+            interceptor=abac_interceptor,
+            ledger=InMemoryEventLedger(),
+            agent_id="facade-registered-agent",
+            session_id="secure-agent-langgraph",
+        )
+        adapter = guard.get_langgraph_adapter()
+        assert adapter._agent_id == "facade-registered-agent"
+        await adapter.before_tool_call("restricted_tool", {})
+
+
+def test_from_env_bundled_policy_fallback_resolves_to_real_file(monkeypatch, tmp_path) -> None:
+    """Regression test: SecureAgent.from_env()'s bundled-policy fallback —
+    the documented path for pip-installed users with no local policies/ dir
+    and no AGENTGUARD_POLICY_PATH set — once pointed at
+    agentguard/core/policies/default.yaml, which does not exist (off by one
+    `.parent`). It only "worked" in this repo because ./policies/default.yaml
+    is always found first via the cwd check. tmp_path has no such directory,
+    forcing the bundled fallback to actually be exercised."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("AGENTGUARD_POLICY_PATH", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    guard = SecureAgent.from_env(goal="Test goal", framework="test")
+    assert guard is not None
+
+
+class TestAdapterBackwardCompatibility:
+    """The new agent_id param must be a pure addition — every existing
+    call site in this repo constructs these adapters without it."""
+
+    def test_all_three_adapters_construct_without_agent_id(
+        self, secure_interceptor: Interceptor
+    ) -> None:
+        AgentGuardOpenAIHooks(
+            interceptor=secure_interceptor,
+            agent_goal="test",
+            session_id="test",
+        )
+        LangGraphAdapter(
+            interceptor=secure_interceptor,
+            agent_goal="test",
+            session_id="test",
+        )
+        OpenClawAdapter(
+            interceptor=secure_interceptor,
+            agent_goal="test",
+            session_id="test",
+        )

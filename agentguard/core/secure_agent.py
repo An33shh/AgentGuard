@@ -106,9 +106,9 @@ class SecureAgent:
         #   3. ./policies/default.yaml relative to CWD (git-repo users)
         #   4. Bundled agentguard/policies/default.yaml (pip-installed users)
         _cwd_policy = Path.cwd() / "policies" / "default.yaml"
-        _bundled_policy = Path(__file__).parent / "policies" / "default.yaml"
+        _bundled_policy = Path(__file__).parent.parent / "policies" / "default.yaml"
         _default_policy = str(_cwd_policy if _cwd_policy.exists() else _bundled_policy)
-        policy_file = policy_path or os.getenv("AGENTGUARD_POLICY_PATH", _default_policy)
+        policy_file = str(policy_path or os.getenv("AGENTGUARD_POLICY_PATH", _default_policy))
 
         backend = create_backend(
             provider=analyzer_provider,
@@ -119,10 +119,11 @@ class SecureAgent:
         hedge_after = float(os.getenv("AGENTGUARD_HEDGE_AFTER", "1.0"))
         analyzer = IntentAnalyzer(backend=backend, hedge_after=hedge_after)
         policy_engine = PolicyEngine.from_yaml(policy_file)
+        database_url = os.getenv("DATABASE_URL")
         if ledger is not None:
             event_ledger = ledger
-        elif os.getenv("DATABASE_URL"):
-            event_ledger = PostgresEventLedger(os.getenv("DATABASE_URL"))
+        elif database_url:
+            event_ledger = PostgresEventLedger(database_url)
         else:
             event_ledger = InMemoryEventLedger()
 
@@ -178,6 +179,7 @@ class SecureAgent:
             agent_goal=self._goal,
             session_id=self._session_id,
             guardrail=self._guardrail,
+            agent_id=self._agent_id,
         )
 
     def get_langgraph_adapter(self) -> Any:
@@ -189,6 +191,7 @@ class SecureAgent:
             agent_goal=self._goal,
             session_id=self._session_id,
             guardrail=self._guardrail,
+            agent_id=self._agent_id,
         )
 
     def wrap_langgraph(self, compiled_graph: Any) -> Any:
