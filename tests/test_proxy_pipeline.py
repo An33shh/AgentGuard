@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 
 from agentguard.guardrail.guardrail import PromptGuardrail
-from agentguard.guardrail.models import GuardrailConfig, GuardrailMode
+from agentguard.guardrail.models import ContextType, GuardrailConfig, GuardrailMode
 from agentguard.interceptor.interceptor import Interceptor
 from agentguard.ledger.event_ledger import InMemoryEventLedger
 from agentguard.policy.engine import PolicyEngine
 from agentguard.policy.schema import PolicyConfig
 from agentguard.proxy.format_handler import AnthropicFormatHandler, OpenAIFormatHandler
 from agentguard.proxy.models import ProxyRequestContext
-from agentguard.proxy.pipeline import ProxyPipeline
+from agentguard.proxy.pipeline import ProxyPipeline, _context_type_for_role
 from tests.conftest import MockAnalyzer
 
 # ---------------------------------------------------------------------------
@@ -141,6 +141,65 @@ class TestInboundScanning:
         )
         assert status == 200
         assert response["choices"][0]["message"]["content"] == "OK"
+
+
+class TestContextTypeForRole:
+    """assistant text is the model's own trusted output, not attacker-
+    controlled input — it must not share tool_result's higher-risk bucket."""
+
+    def test_user_role_is_user_input(self) -> None:
+        assert _context_type_for_role("user") == ContextType.USER_INPUT
+
+    def test_system_role_is_system(self) -> None:
+        assert _context_type_for_role("system") == ContextType.SYSTEM
+
+    def test_assistant_role_is_not_tool_response(self) -> None:
+        assert _context_type_for_role("assistant") == ContextType.SYSTEM
+
+    def test_tool_result_role_is_tool_response(self) -> None:
+        assert _context_type_for_role("tool_result") == ContextType.TOOL_RESPONSE
+
+
+class TestDeepAnalysisOverridesLocalFalsePositive:
+    @pytest.mark.asyncio
+    async def test_assistant_message_discussing_security_terms_not_blocked(
+        self, interceptor: Interceptor, context: ProxyRequestContext
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from agentguard.guardrail.models import GuardrailVerdict
+
+        guardrail = PromptGuardrail(GuardrailConfig(mode=GuardrailMode.ENFORCE, deep_analysis=True))
+        guardrail._deep = AsyncMock()
+        guardrail._deep.analyze.return_value = (GuardrailVerdict.ALLOW, [], 0.05)
+        pipeline = ProxyPipeline(
+            interceptor=interceptor, guardrail=guardrail,
+            scan_inbound=True, intercept_tool_calls=True,
+        )
+        request_body = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "How does our guardrail work?"},
+                {
+                    "role": "assistant",
+                    "content": "It scans for jailbreak attempts and prompt injection patterns.",
+                },
+                {"role": "user", "content": "Great, thanks."},
+            ],
+        }
+        upstream_response = {
+            "choices": [{"message": {"role": "assistant", "content": "Happy to help."}, "finish_reason": "stop"}]
+        }
+        handler = OpenAIFormatHandler()
+        response, status = await pipeline.handle_request(
+            body=request_body,
+            upstream_headers={},
+            handler=handler,
+            context=context,
+            upstream_call=make_upstream(upstream_response),
+        )
+        assert status == 200
+        assert response["choices"][0]["message"]["content"] == "Happy to help."
 
 
 # ---------------------------------------------------------------------------

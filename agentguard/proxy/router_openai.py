@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from agentguard.auth.rate_limiter import get_rate_limiter
 from agentguard.proxy.dependencies import (
+    build_upstream_headers,
     extract_request_context,
     get_http_client,
     get_proxy_config,
@@ -64,7 +65,7 @@ async def proxy_chat_completions(request: Request) -> JSONResponse:
         )
 
     # Rate limit by session_id derived from auth header
-    context = extract_request_context(request, config)
+    context = extract_request_context(request, config, body=body, handler=_handler)
     limiter = get_rate_limiter()
     if not await limiter.is_allowed(context.session_id):
         return JSONResponse(
@@ -77,7 +78,7 @@ async def proxy_chat_completions(request: Request) -> JSONResponse:
         )
 
     # Build upstream headers — pass through auth, strip hop-by-hop headers
-    upstream_headers = _build_upstream_headers(request)
+    upstream_headers = build_upstream_headers(request, config)
 
     pipeline = _get_pipeline()
     client = get_http_client()
@@ -97,13 +98,3 @@ async def proxy_chat_completions(request: Request) -> JSONResponse:
     return JSONResponse(content=response_body, status_code=status_code)
 
 
-def _build_upstream_headers(request: Request) -> dict[str, str]:
-    """Extract headers to forward upstream, removing proxy-specific ones."""
-    _strip = {
-        "host", "content-length", "transfer-encoding", "connection",
-        "x-agentguard-goal", "x-agentguard-session", "x-agentguard-agentid",
-    }
-    return {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in _strip
-    }

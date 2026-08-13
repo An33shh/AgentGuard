@@ -17,7 +17,7 @@
  */
 
 const AGENTGUARD_API_URL =
-  process.env.AGENTGUARD_API_URL ?? "http://localhost:8000";
+  process.env.AGENTGUARD_API_URL ?? "http://localhost:8747";
 const AGENTGUARD_API_TOKEN = process.env.AGENTGUARD_API_TOKEN ?? "";
 
 interface InterceptRequest {

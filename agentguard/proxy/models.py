@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from agentguard.proxy.fingerprint import FingerprintSignalMismatch
+
 
 @dataclass
 class ProxyInboundScanTarget:
@@ -49,6 +51,9 @@ class ProxyRequestContext:
     session_id: str
     agent_id: str
     framework: str = "proxy"
+    # Descriptive/audit-only signal — see agentguard.proxy.fingerprint. Never
+    # feeds framework resolution, derive_agent_id, or any enforcement path.
+    fingerprint_mismatch: FingerprintSignalMismatch | None = None
     correlation_id: str = ""          # X-Request-ID threaded through for audit correlation
     initiating_principal: str = ""    # auth header hash — identifies the controlling operator
     # Raw auth header value — used only for session/agent derivation, never logged

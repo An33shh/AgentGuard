@@ -43,12 +43,18 @@ class ProxyConfig(BaseSettings):
 
     # Guardrail
     guardrail_mode: str = "enforce"  # "observe" or "enforce"
-    guardrail_deep_analysis: bool = False
+    # Regex/keyword matching alone can't tell an attack from text that
+    # merely discusses the same terminology (see AGENTGUARD_PROXY_GUARDRAIL_
+    # DEEP_ANALYSIS=false for the failure mode this caused). Defaulting to
+    # True requires a working Anthropic-credentialed deep analyzer backend —
+    # see ProxyPipeline startup validation.
+    guardrail_deep_analysis: bool = True
 
     # Identity extraction
     goal_header: str = "X-AgentGuard-Goal"
     session_header: str = "X-AgentGuard-Session"
     agent_id_header: str = "X-AgentGuard-AgentId"
+    framework_header: str = "X-AgentGuard-Framework"
 
     # Policy
     policy_path: str | None = None
