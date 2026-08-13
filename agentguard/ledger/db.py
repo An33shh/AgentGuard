@@ -9,7 +9,6 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     Float,
     Index,
@@ -26,7 +25,7 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class _FlexJSON(TypeDecorator):
@@ -80,6 +79,7 @@ from agentguard.core.models import (
     PolicyViolation,
     ProvenanceTag,
     RiskAssessment,
+    SessionSummary,
     TimelineSummary,
 )
 from agentguard.ledger.event_ledger import EventLedger
@@ -94,54 +94,54 @@ class Base(DeclarativeBase):
 class SessionRecord(Base):
     __tablename__ = "sessions"
 
-    session_id = Column(String(64), primary_key=True)
-    agent_goal = Column(Text, nullable=False)
-    framework = Column(String(64), nullable=False, default="unknown")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
-    total_events = Column(Integer, nullable=False, default=0)
-    blocked_events = Column(Integer, nullable=False, default=0)
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_goal: Mapped[str] = mapped_column(Text, nullable=False)
+    framework: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    total_events: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_events: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class EventRecord(Base):
     __tablename__ = "events"
 
-    event_id = Column(_FlexUUID, primary_key=True, default=uuid.uuid4)
-    session_id = Column(String(64), nullable=False)
-    agent_id = Column(String(128), nullable=False, default="unknown")
-    agent_is_registered = Column(Boolean, nullable=False, default=False)
-    agent_goal = Column(Text, nullable=False)
-    framework = Column(String(64), nullable=False, default="unknown")
+    event_id: Mapped[uuid.UUID] = mapped_column(_FlexUUID, primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(128), nullable=False, default="unknown")
+    agent_is_registered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    agent_goal: Mapped[str] = mapped_column(Text, nullable=False)
+    framework: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
 
-    action_id = Column(String(64), nullable=False)
-    action_type = Column(String(32), nullable=False)
-    tool_name = Column(String(256), nullable=False)
-    parameters = Column(_FlexJSON, nullable=False, default=dict)
-    raw_payload = Column(_FlexJSON, nullable=False, default=dict)
+    action_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(_FlexJSON, nullable=False, default=dict)
+    raw_payload: Mapped[dict[str, Any]] = mapped_column(_FlexJSON, nullable=False, default=dict)
 
-    risk_score = Column(Float, nullable=False)
-    reason = Column(Text, nullable=False)
-    indicators = Column(_FlexJSON, nullable=False, default=list)
-    is_goal_aligned = Column(Boolean, nullable=False, default=True)
-    analyzer_model = Column(String(64), nullable=False, default="unknown")
-    latency_ms = Column(Float, nullable=False, default=0.0)
+    risk_score: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    indicators: Mapped[list[str]] = mapped_column(_FlexJSON, nullable=False, default=list)
+    is_goal_aligned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    analyzer_model: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
-    decision = Column(String(16), nullable=False)
-    policy_rule = Column(String(128), nullable=True)
-    policy_detail = Column(Text, nullable=True)
-    policy_violation = Column(_FlexJSON, nullable=True)
-    attack_taxonomy = Column(_FlexJSON, nullable=True)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_rule: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    policy_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    policy_violation: Mapped[dict[str, Any] | None] = mapped_column(_FlexJSON, nullable=True)
+    attack_taxonomy: Mapped[dict[str, Any] | None] = mapped_column(_FlexJSON, nullable=True)
 
-    provenance = Column(_FlexJSON, nullable=False, default=list)
-    correlation_id = Column(String(64), nullable=False, default="")
-    initiating_principal = Column(String(256), nullable=False, default="")
+    provenance: Mapped[list[Any]] = mapped_column(_FlexJSON, nullable=False, default=list)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    initiating_principal: Mapped[str] = mapped_column(String(256), nullable=False, default="")
 
     # Paper-2 hardening fields — empty string when hardening is disabled.
-    approval_id = Column(String(64), nullable=False, default="")
-    event_hash = Column(String(64), nullable=False, default="")
-    prev_event_hash = Column(String(64), nullable=False, default="")
+    approval_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    event_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    prev_event_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
-    created_at = Column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         Index("ix_events_session_id", "session_id"),
@@ -165,6 +165,38 @@ def _deserialize_provenance(raw: Any) -> list[ProvenanceTag]:
     if isinstance(raw, list):
         return [ProvenanceTag.model_validate(t) for t in raw]
     return []
+
+
+def _apply_event_filters(
+    query: Any,
+    session_id: str | None = None,
+    agent_id: str | None = None,
+    decision: Decision | None = None,
+    min_risk: float | None = None,
+    max_risk: float | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> Any:
+    """Shared WHERE-clause logic for PostgresEventLedger's list_events and
+    search_events_fulltext, so the two never drift apart. `query` is a
+    SQLAlchemy Select over EventRecord."""
+    if session_id:
+        query = query.where(EventRecord.session_id == session_id)
+    if agent_id:
+        query = query.where(EventRecord.agent_id == agent_id)
+    if decision:
+        query = query.where(EventRecord.decision == decision.value)
+    if min_risk is not None:
+        query = query.where(EventRecord.risk_score >= min_risk)
+    if max_risk is not None:
+        query = query.where(EventRecord.risk_score <= max_risk)
+    if since:
+        since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
+        query = query.where(EventRecord.created_at >= since_aware)
+    if until:
+        until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
+        query = query.where(EventRecord.created_at <= until_aware)
+    return query
 
 
 class PostgresEventLedger(EventLedger):
@@ -268,6 +300,7 @@ class PostgresEventLedger(EventLedger):
     async def list_events(
         self,
         session_id: str | None = None,
+        agent_id: str | None = None,
         decision: Decision | None = None,
         min_risk: float | None = None,
         max_risk: float | None = None,
@@ -276,21 +309,10 @@ class PostgresEventLedger(EventLedger):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Event]:
-        query = select(EventRecord)
-        if session_id:
-            query = query.where(EventRecord.session_id == session_id)
-        if decision:
-            query = query.where(EventRecord.decision == decision.value)
-        if min_risk is not None:
-            query = query.where(EventRecord.risk_score >= min_risk)
-        if max_risk is not None:
-            query = query.where(EventRecord.risk_score <= max_risk)
-        if since:
-            since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
-            query = query.where(EventRecord.created_at >= since_aware)
-        if until:
-            until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
-            query = query.where(EventRecord.created_at <= until_aware)
+        query = _apply_event_filters(
+            select(EventRecord), session_id=session_id, agent_id=agent_id, decision=decision,
+            min_risk=min_risk, max_risk=max_risk, since=since, until=until,
+        )
         query = query.order_by(EventRecord.created_at.desc()).offset(offset).limit(limit)
         async with self._sessionmaker() as session:
             result = await session.execute(query)
@@ -316,6 +338,27 @@ class PostgresEventLedger(EventLedger):
         async with self._sessionmaker() as session:
             result = await session.execute(query)
             return [row[0] for row in result]
+
+    async def list_session_summaries(self) -> list[SessionSummary]:
+        # SessionRecord already carries everything needed — one query, same
+        # ordering as list_sessions, no per-session N+1.
+        query = select(SessionRecord).order_by(
+            SessionRecord.blocked_events.desc(), SessionRecord.total_events.desc()
+        )
+        async with self._sessionmaker() as session:
+            result = await session.execute(query)
+            records = result.scalars().all()
+        return [
+            SessionSummary(
+                session_id=r.session_id,
+                agent_goal=r.agent_goal,
+                framework=r.framework,
+                total_events=r.total_events,
+                blocked_events=r.blocked_events,
+                updated_at=r.updated_at,
+            )
+            for r in records
+        ]
 
     async def get_timeline_summary(self, session_id: str) -> TimelineSummary | None:
         events = await self.get_timeline(session_id)
@@ -552,15 +595,29 @@ class PostgresEventLedger(EventLedger):
             )
             await session.commit()
 
-    async def search_events_fulltext(self, query: str, limit: int = 20) -> list[Event]:
-        """Return events whose reason field contains the query string (case-insensitive)."""
+    async def search_events_fulltext(
+        self,
+        query: str,
+        limit: int = 20,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        decision: Decision | None = None,
+        min_risk: float | None = None,
+        max_risk: float | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Event]:
+        """Return events whose reason field contains the query string
+        (case-insensitive), composed with the same optional filters as
+        list_events."""
+        sa_query = _apply_event_filters(
+            select(EventRecord).where(EventRecord.reason.ilike(f"%{query}%")),
+            session_id=session_id, agent_id=agent_id, decision=decision,
+            min_risk=min_risk, max_risk=max_risk, since=since, until=until,
+        )
+        sa_query = sa_query.order_by(EventRecord.created_at.desc()).limit(limit)
         async with self._sessionmaker() as session:
-            result = await session.execute(
-                select(EventRecord)
-                .where(EventRecord.reason.ilike(f"%{query}%"))
-                .order_by(EventRecord.created_at.desc())
-                .limit(limit)
-            )
+            result = await session.execute(sa_query)
             records = result.scalars().all()
         return [self._record_to_event(r) for r in records]
 
@@ -569,15 +626,27 @@ class PostgresEventLedger(EventLedger):
     ) -> tuple[list[str], list[str], list[float]]:
         """Return (tools_used, attack_patterns, risk_trend) for an agent."""
         result = await session.execute(
-            select(EventRecord.tool_name, EventRecord.indicators, EventRecord.risk_score)
+            select(
+                EventRecord.tool_name, EventRecord.indicators,
+                EventRecord.risk_score, EventRecord.decision,
+            )
             .where(EventRecord.agent_id == agent_id)
             .order_by(EventRecord.created_at.desc())
             .limit(100)
         )
         rows = result.all()
         tools = list(dict.fromkeys(r.tool_name for r in rows))[:20]
+        # Only blocked events contribute to attack_patterns — matches
+        # InMemoryEventLedger.list_agents (event_ledger.py), which derives
+        # patterns from `blocked = [e for e in evts if e.decision ==
+        # Decision.BLOCK]` only. Without this filter, indicators from
+        # ALLOW/REVIEW events (the analyzer flags indicators independent of
+        # the eventual policy decision) leaked into the "attack patterns"
+        # shown for agents that were never actually blocked.
         patterns: list[str] = []
         for r in rows:
+            if r.decision != Decision.BLOCK.value:
+                continue
             for ind in (r.indicators or []):
                 if ind not in patterns:
                     patterns.append(ind)

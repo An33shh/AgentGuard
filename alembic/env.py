@@ -5,8 +5,9 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
-from alembic import context
+from agentguard.guardrail.db import GuardrailBase
 from agentguard.ledger.db import Base
+from alembic import context
 
 config = context.config
 if config.config_file_name is not None:
@@ -18,7 +19,11 @@ if config.config_file_name is not None:
 if database_url := os.getenv("DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", database_url)
 
-target_metadata = Base.metadata
+# Two independent DeclarativeBase hierarchies (event ledger + guardrail
+# ledger) both need to be tracked here — a single-base target_metadata is
+# exactly how guardrail_events went unmigrated for the entire lifetime of
+# the guardrail subsystem (0005 fixes that, this line prevents a repeat).
+target_metadata = [Base.metadata, GuardrailBase.metadata]
 
 
 def run_migrations_offline() -> None:
