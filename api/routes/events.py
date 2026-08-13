@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from agentguard.core.errors import AgentGuardHTTPError, ErrorCode
-from agentguard.core.models import Decision, Event, TimelineSummary
+from agentguard.core.models import Decision, Event, SessionSummary, TimelineSummary
 from api.dependencies import LedgerDep
 
 router = APIRouter(prefix="/api/v1", tags=["events"])
@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/v1", tags=["events"])
 async def list_events(
     ledger: LedgerDep,
     session_id: str | None = Query(None),
+    agent_id: str | None = Query(None),
     decision: Decision | None = Query(None),
     min_risk: float | None = Query(None, ge=0.0, le=1.0),
     max_risk: float | None = Query(None, ge=0.0, le=1.0),
@@ -29,6 +30,7 @@ async def list_events(
     """List events with optional filters."""
     return await ledger.list_events(
         session_id=session_id,
+        agent_id=agent_id,
         decision=decision,
         min_risk=min_risk,
         max_risk=max_risk,
@@ -75,6 +77,14 @@ async def list_sessions(ledger: LedgerDep) -> list[str]:
     return await ledger.list_sessions()
 
 
+@router.get("/sessions/summary", response_model=list[SessionSummary])
+async def list_session_summaries(ledger: LedgerDep) -> list[SessionSummary]:
+    """List all sessions with summary counters (goal, framework, event/block
+    counts), attack-first sorted. Sibling to /sessions rather than a change
+    to its list[str] contract, which existing callers rely on."""
+    return await ledger.list_session_summaries()
+
+
 @router.get("/stats", response_model=dict)
 async def get_stats(ledger: LedgerDep) -> dict:
     """Get overall statistics across all sessions."""
@@ -84,6 +94,13 @@ async def get_stats(ledger: LedgerDep) -> dict:
 class SearchRequest(BaseModel):
     query: str
     limit: int = 20
+    session_id: str | None = None
+    agent_id: str | None = None
+    decision: Decision | None = None
+    min_risk: float | None = None
+    max_risk: float | None = None
+    since: datetime | None = None
+    until: datetime | None = None
 
 
 @router.post("/events/search", response_model=list[Event])
@@ -91,5 +108,16 @@ async def search_events(
     body: SearchRequest,
     ledger: LedgerDep,
 ) -> list[Event]:
-    """Search events by case-insensitive substring match on the reason field."""
-    return await ledger.search_events_fulltext(body.query, body.limit)
+    """Search events by case-insensitive substring match on the reason
+    field, composed with the same optional filters as GET /events."""
+    return await ledger.search_events_fulltext(
+        body.query,
+        body.limit,
+        session_id=body.session_id,
+        agent_id=body.agent_id,
+        decision=body.decision,
+        min_risk=body.min_risk,
+        max_risk=body.max_risk,
+        since=body.since,
+        until=body.until,
+    )
