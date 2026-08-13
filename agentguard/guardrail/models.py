@@ -7,6 +7,13 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
 
+# Re-exported for backward compatibility — the canonical definition lives in
+# agentguard.analyzer.patterns, which must be a dependency-free leaf module
+# (see that module's docstring on DetectionCategory for why it can't live
+# here instead: agentguard/guardrail/__init__.py's eager imports would
+# create a circular import).
+from agentguard.analyzer.patterns import DetectionCategory
+
 
 class GuardrailVerdict(str, Enum):
     ALLOW = "allow"
@@ -24,13 +31,6 @@ class ContextType(str, Enum):
 class GuardrailMode(str, Enum):
     OBSERVE = "observe"  # Log only, never block — for gradual rollout
     ENFORCE = "enforce"  # Block or redact
-
-
-class DetectionCategory(str, Enum):
-    PROMPT_INJECTION = "prompt_injection"
-    CREDENTIAL = "credential"
-    PII = "pii"
-    JAILBREAK = "jailbreak"
 
 
 class GuardrailDetection(BaseModel):

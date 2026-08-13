@@ -33,8 +33,18 @@ from agentguard.guardrail.models import (
 logger = structlog.get_logger(__name__)
 
 _INJECTION_CATEGORIES = {DetectionCategory.PROMPT_INJECTION, DetectionCategory.JAILBREAK}
-# High-confidence threshold for local detections to skip deep analysis
-_LOCAL_HIGH_CONFIDENCE = 0.90
+_SENSITIVE_CATEGORIES = {DetectionCategory.CREDENTIAL, DetectionCategory.PII}
+# Local credential/PII matches at or above this confidence (AWS key format,
+# PEM headers, exact-format SSNs — not the lower-confidence email/phone/
+# credit-card patterns) are objectively identifiable by pattern, unlike
+# injection/jailbreak signals, which are genuinely context-dependent. An LLM
+# reviewing "is this really an AWS key" can't meaningfully second-guess a
+# regex that already matched the exact AWS key format — so deep analysis is
+# skipped for this specific, narrow case, both to avoid an unnecessary LLM
+# round-trip and, more importantly, to prevent deep analysis's verdict from
+# overriding a locally-certain credential/PII finding the way it's meant to
+# for genuinely ambiguous injection/jailbreak text.
+_HIGH_CONFIDENCE_SENSITIVE_THRESHOLD = 0.90
 
 
 class PromptGuardrail:
@@ -132,24 +142,42 @@ class PromptGuardrail:
 
         analyzer_model = "local_scanner"
 
-        # 3. Optional deep analysis — skip if local already found high-confidence injection
-        if self._deep is not None:
-            has_high_confidence_local = any(
-                d.confidence >= _LOCAL_HIGH_CONFIDENCE and d.category in _INJECTION_CATEGORIES
-                for d in detections
-            )
-            if not has_high_confidence_local:
-                try:
-                    _, llm_detections, _ = await self._deep.analyze(
-                        text, context_type, detections
-                    )
-                    detections = detections + llm_detections
-                    analyzer_model = self._config.deep_analysis_model
-                except Exception as exc:
-                    logger.warning("guardrail_deep_analysis_failed", error=str(exc))
+        # 3. Optional deep analysis — run when configured, including
+        # (especially) when the local regex scanner already found a
+        # high-confidence injection/jailbreak match. Literal keyword
+        # matching can't distinguish an actual attack from text that merely
+        # discusses the same terminology (e.g. security engineering work
+        # that mentions "jailbreak" or quotes "ignore previous instructions"
+        # as an example of what to detect) — that's exactly the case where a
+        # semantic second opinion is most needed, not the case to skip it on.
+        #
+        # Exception: skip it when every local detection is a high-confidence
+        # credential/PII match with no injection/jailbreak signal at all —
+        # see _HIGH_CONFIDENCE_SENSITIVE_THRESHOLD's comment above for why.
+        skip_deep = bool(detections) and all(
+            det.category in _SENSITIVE_CATEGORIES
+            and det.confidence >= _HIGH_CONFIDENCE_SENSITIVE_THRESHOLD
+            for det in detections
+        )
+        deep_verdict: GuardrailVerdict | None = None
+        if self._deep is not None and not skip_deep:
+            try:
+                deep_verdict, llm_detections, _ = await self._deep.analyze(
+                    text, context_type, detections
+                )
+                detections = detections + llm_detections
+                analyzer_model = self._config.deep_analysis_model
+            except Exception as exc:
+                logger.warning("guardrail_deep_analysis_failed", error=str(exc))
 
-        # 4. Decide real verdict
-        real_verdict = self._decide_verdict(detections, context_type)
+        # 4. Decide real verdict — trust deep analysis's considered judgment
+        # over raw pattern-match heuristics when it ran successfully; fall
+        # back to the local scanner's threshold-based verdict otherwise
+        # (deep analysis disabled, or it errored — see the except above).
+        real_verdict = (
+            deep_verdict if deep_verdict is not None
+            else self._decide_verdict(detections, context_type)
+        )
 
         # 5. Build redacted text when verdict is REDACT
         redacted_text: str | None = None
@@ -211,18 +239,21 @@ class PromptGuardrail:
         if not detections:
             return GuardrailVerdict.ALLOW
 
-        # Context multiplier: higher-risk sources get stricter thresholds
+        # Context multiplier: higher-risk sources get a lower bar to cross,
+        # i.e. a smaller multiplier must SHRINK the threshold being compared
+        # against, not the confidence being compared — scaling confidence
+        # down instead makes high-risk contexts harder to block, the
+        # opposite of "lower confidence thresholds" above.
         threshold_multiplier = (
             0.85
             if context_type in (ContextType.EXTERNAL_DATA, ContextType.TOOL_RESPONSE)
             else 1.0
         )
+        block_threshold = 0.70 * threshold_multiplier
 
         for det in detections:
-            if det.category in _INJECTION_CATEGORIES:
-                effective_confidence = det.confidence * threshold_multiplier
-                if effective_confidence >= 0.70:
-                    return GuardrailVerdict.BLOCK
+            if det.category in _INJECTION_CATEGORIES and det.confidence >= block_threshold:
+                return GuardrailVerdict.BLOCK
 
         # No injection found — check for credentials/PII
         has_sensitive = any(

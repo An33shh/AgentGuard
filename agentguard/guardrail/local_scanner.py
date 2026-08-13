@@ -2,70 +2,31 @@
 
 Detects prompt injection, credential leaks, and PII in raw text.
 Returns GuardrailDetection items with byte offsets — required for REDACT.
+
+Patterns are sourced from agentguard.analyzer.patterns — the canonical,
+shared registry that replaced this module's own private copy (which had
+already drifted from agentguard/analyzer/local_classifier.py's copy before
+the consolidation; see that module's docstring for why).
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-
-from agentguard.guardrail.models import DetectionCategory, GuardrailDetection
+from agentguard.analyzer.patterns import DetectionCategory, patterns_for
+from agentguard.guardrail.models import GuardrailDetection
 
 _SNIPPET_MAX = 80
-
-
-@dataclass(frozen=True)
-class _Pattern:
-    name: str
-    category: DetectionCategory
-    regex: re.Pattern[str]
-    confidence: float
-
-
-def _p(
-    name: str,
-    pattern: str,
-    category: DetectionCategory,
-    confidence: float = 0.92,
-    flags: int = re.IGNORECASE,
-) -> _Pattern:
-    return _Pattern(name=name, category=category, regex=re.compile(pattern, flags), confidence=confidence)
-
-
-_PATTERNS: list[_Pattern] = [
-    # ── Prompt injection ─────────────────────────────────────────────────────
-    _p("ignore_previous_instructions", r"ignore\s+(previous|prior|all|your)\s+instructions?", DetectionCategory.PROMPT_INJECTION),
-    _p("override_goal_or_system", r"override\s+(your|the|all|previous)\s+(goal|instruction|directive|system)", DetectionCategory.PROMPT_INJECTION),
-    _p("forget_instructions", r"forget\s+(?:(?:your|all|previous|prior)\s+)+instructions?", DetectionCategory.PROMPT_INJECTION),
-    _p("you_are_now", r"you\s+are\s+now\b", DetectionCategory.PROMPT_INJECTION),
-    _p("disregard", r"disregard\s+(all|your|previous|prior)", DetectionCategory.PROMPT_INJECTION),
-    _p("new_system_prompt", r"new\s+system\s+prompt", DetectionCategory.PROMPT_INJECTION),
-    _p("act_as", r"act\s+as\s+(if\s+you\s+are|a\s+)", DetectionCategory.PROMPT_INJECTION),
-    _p("do_not_follow_guidelines", r"do\s+not\s+follow\s+(your|the)\s+(guidelines?|instructions?|rules?)", DetectionCategory.PROMPT_INJECTION),
-    _p("bypass_safety", r"bypass\s+(your\s+)?(safety|security|policy|restriction)", DetectionCategory.PROMPT_INJECTION),
-    _p("pretend_to_be", r"pretend\s+(you\s+are|to\s+be)", DetectionCategory.PROMPT_INJECTION),
-    _p("roleplay_as", r"roleplay\s+as", DetectionCategory.PROMPT_INJECTION),
-    # ── Jailbreak ────────────────────────────────────────────────────────────
-    _p("jailbreak_keyword", r"\bjailbreak\b", DetectionCategory.JAILBREAK),
-    _p("dan_attack", r"\bDAN\b", DetectionCategory.JAILBREAK, flags=0),  # case-sensitive
-    _p("llm_token_injection", r"\[INST\]|\[\/INST\]|<\|im_start\|>|<\|im_end\|>", DetectionCategory.JAILBREAK, flags=0),
-    # ── Credentials ──────────────────────────────────────────────────────────
-    _p("anthropic_openai_key", r"(?:sk-ant-|sk-)[A-Za-z0-9\-_]{20,}", DetectionCategory.CREDENTIAL, confidence=0.98, flags=0),
-    _p("github_token", r"(?:ghp_|gho_|github_pat_)[A-Za-z0-9]{36,}", DetectionCategory.CREDENTIAL, confidence=0.98, flags=0),
-    _p("aws_access_key", r"AKIA[0-9A-Z]{16}", DetectionCategory.CREDENTIAL, confidence=0.98, flags=0),
-    _p("private_key_header", r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----", DetectionCategory.CREDENTIAL, confidence=0.99),
-    _p("plaintext_credential", r'(?:password|passwd|secret|api[_\-]?key|token)\s*[=:]\s*[\'\"]\S{8,}[\'\"]', DetectionCategory.CREDENTIAL, confidence=0.85),
-    # ── PII ──────────────────────────────────────────────────────────────────
-    _p("us_ssn", r"\b\d{3}-\d{2}-\d{4}\b", DetectionCategory.PII, confidence=0.80),
-    _p("email_address", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", DetectionCategory.PII, confidence=0.75),
-    _p("us_phone", r"\b(?:\+1[\s\-.]?)?\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}\b", DetectionCategory.PII, confidence=0.70),
-    _p("credit_card", r"\b(?:\d[ \-]?){13,16}\b", DetectionCategory.PII, confidence=0.60),
-]
 
 # Group by category for enable/disable flags
 _INJECTION_CATEGORIES = {DetectionCategory.PROMPT_INJECTION, DetectionCategory.JAILBREAK}
 _CREDENTIAL_CATEGORIES = {DetectionCategory.CREDENTIAL}
 _PII_CATEGORIES = {DetectionCategory.PII}
+
+_PATTERNS = patterns_for(
+    DetectionCategory.PROMPT_INJECTION,
+    DetectionCategory.JAILBREAK,
+    DetectionCategory.CREDENTIAL,
+    DetectionCategory.PII,
+)
 
 
 class LocalScanner:
