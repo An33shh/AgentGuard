@@ -160,11 +160,19 @@ class TestContextTypeForRole:
         assert _context_type_for_role("tool_result") == ContextType.TOOL_RESPONSE
 
 
-class TestDeepAnalysisOverridesLocalFalsePositive:
+class TestDeepAnalysisInjectionVerdictCannotBeDowngraded:
     @pytest.mark.asyncio
-    async def test_assistant_message_discussing_security_terms_not_blocked(
+    async def test_assistant_message_discussing_security_terms_still_blocked(
         self, interceptor: Interceptor, context: ProxyRequestContext
     ) -> None:
+        """Regression test for a security-review finding: deep analysis may
+        only escalate an injection/jailbreak verdict the local scanner
+        already reached, never downgrade one — see
+        agentguard/guardrail/guardrail.py's step-4 comment. Even though
+        deep analysis (mocked here) judges this benign, the local
+        jailbreak_keyword match stands, matching
+        tests/test_guardrail.py::test_deep_analysis_allow_cannot_downgrade_local_injection_block
+        at the pipeline-integration level."""
         from unittest.mock import AsyncMock
 
         from agentguard.guardrail.models import GuardrailVerdict
@@ -187,19 +195,17 @@ class TestDeepAnalysisOverridesLocalFalsePositive:
                 {"role": "user", "content": "Great, thanks."},
             ],
         }
-        upstream_response = {
-            "choices": [{"message": {"role": "assistant", "content": "Happy to help."}, "finish_reason": "stop"}]
-        }
         handler = OpenAIFormatHandler()
         response, status = await pipeline.handle_request(
             body=request_body,
             upstream_headers={},
             handler=handler,
             context=context,
-            upstream_call=make_upstream(upstream_response),
+            upstream_call=make_upstream({}),  # Should not be called
         )
         assert status == 200
-        assert response["choices"][0]["message"]["content"] == "Happy to help."
+        content = response["choices"][0]["message"]["content"]
+        assert "AgentGuard" in content
 
 
 # ---------------------------------------------------------------------------
