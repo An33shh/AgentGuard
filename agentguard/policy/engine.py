@@ -101,14 +101,6 @@ def _make_violation(
     )
 
 
-def _domain_matches(domain: str, pattern: str) -> bool:
-    """Match domain against pattern, supporting wildcards like *.ngrok.io."""
-    if pattern.startswith("*."):
-        suffix = pattern[1:]  # e.g. ".ngrok.io"
-        return domain == pattern[2:] or domain.endswith(suffix)
-    return domain == pattern or fnmatch.fnmatch(domain, pattern)
-
-
 def _glob_to_regex(pattern: str) -> str:
     """Convert a glob pattern with ** and * support to a regex string."""
     parts: list[str] = []
@@ -133,6 +125,16 @@ def _glob_to_regex(pattern: str) -> str:
 
 
 _MAX_PATH_LEN = 4096
+
+# Minimum agentguard.analyzer.patterns.Pattern.confidence for a built-in
+# DESTRUCTIVE_SHELL pattern to participate in shell_command_policy's
+# unconditional, every-parameter, hard-BLOCK sweep — see
+# PolicyEngine._build_shell_deny_patterns's docstring. 0.85 keeps the
+# genuinely low-ambiguity syntax (rm -rf, fork bombs, pipe-to-shell,
+# credential-file exfiltration — all >= 0.88) while excluding single-word/
+# low-specificity signals (sudo_elevation 0.70, chmod_world_writable 0.75)
+# that are too common in benign prose to hard-block unconditionally.
+_SHELL_DENY_MIN_CONFIDENCE = 0.85
 
 
 def _expand_path(path: str) -> str:
@@ -213,13 +215,38 @@ class PolicyEngine:
 
     def _build_shell_deny_patterns(self) -> list[re.Pattern[str]]:
         """Compile shell_command_policy's deny patterns — the operator's own
-        explicit list if configured, else the built-in DESTRUCTIVE_SHELL set."""
+        explicit list if configured, else the built-in DESTRUCTIVE_SHELL set,
+        filtered to _SHELL_DENY_MIN_CONFIDENCE and above.
+
+        A code-review finding: every DESTRUCTIVE_SHELL pattern used to
+        participate in this hard-BLOCK sweep regardless of its own
+        confidence value, even though Rule 1.5 scans EVERY string-valued
+        parameter of EVERY tool call unconditionally (see evaluate()'s Rule
+        1.5 comment for why that's deliberate and not itself the bug).
+        sudo_elevation (confidence 0.70 — bare "\\bsudo\\b") isn't
+        objectively dangerous the way rm -rf or a fork bomb is; it's just a
+        common word in ordinary technical writing ("Install with: sudo
+        apt-get install foo"), so combined with the unconditional scan it
+        hard-blocked routine Write calls whose *content* merely mentioned
+        it. This module's own docstring already describes Rule 1.5 as "a
+        fast lane for the obvious cases, not a replacement for semantic
+        judgment on ambiguous ones" — a single common word is exactly the
+        ambiguous case that fast lane was never meant to hard-block; it
+        still reaches allow_tools/LLM risk scoring below like anything
+        else. An operator's own explicit `deny_patterns` list is NOT
+        filtered — those are raw strings with no confidence score, and an
+        explicit config is an intentional opt-in this method shouldn't
+        second-guess.
+        """
         cfg = self._config.shell_command_policy
         if not cfg.enabled:
             return []
         if cfg.deny_patterns:
             return [re.compile(p, re.IGNORECASE) for p in cfg.deny_patterns]
-        return [p.regex for p in patterns_for(DetectionCategory.DESTRUCTIVE_SHELL)]
+        return [
+            p.regex for p in patterns_for(DetectionCategory.DESTRUCTIVE_SHELL)
+            if p.confidence >= _SHELL_DENY_MIN_CONFIDENCE
+        ]
 
     @classmethod
     def from_yaml(cls, path: str) -> PolicyEngine:
@@ -292,7 +319,22 @@ class PolicyEngine:
         # an inherently-defeatable heuristic; enforcement must not depend
         # on it succeeding. Mirrors LocalClassifier._params_contain_injection's
         # already-proven approach to the identical problem.
-        if self._shell_deny_patterns:
+        #
+        # The one exception: ActionType.FILE_WRITE. A code-review finding —
+        # a Write call whose *content* merely mentions "rm -rf build/" in a
+        # README or script (ordinary, common documentation) hard-blocked
+        # here even though nothing executes; writing text that looks like a
+        # command poses no risk from the write itself. This is NOT the same
+        # gap the classification-independence fix above closed: that was
+        # about an action that actually EXECUTES a shell command hiding
+        # under a nonstandard tool/parameter name (still caught regardless
+        # of type, including TOOL_CALL/SHELL_COMMAND) — FILE_WRITE
+        # specifically means "this is being persisted, not run," so
+        # trusting it here doesn't reopen that exploit. If the written
+        # content is later actually executed by a separate tool call, that
+        # call's own command string is scanned independently when it
+        # happens; a script's content sitting inert on disk is not.
+        if self._shell_deny_patterns and action.type != ActionType.FILE_WRITE:
             for val in iter_all_string_values(action.parameters):
                 for pattern in self._shell_deny_patterns:
                     if pattern.search(val):

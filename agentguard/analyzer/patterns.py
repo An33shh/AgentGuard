@@ -118,20 +118,39 @@ PATTERNS: list[Pattern] = [
         r"(curl|wget)\s+.*?(?:-o|-O|--output)\s+(\S+).*?(?:&&|;|\n)\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|perl|ruby|node)\s+\2\b",
         DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.88,
     ),
+    # chmod_world_writable and sudo_elevation are deliberately NOT in this
+    # list — see _SHELL_DENY_MIN_CONFIDENCE's comment in policy/engine.py.
+    # Both are still registered here (harmless, patterns_for() callers
+    # filter by category+confidence) for guardrail/local_classifier reuse
+    # if a future consumer wants them at a different bar.
     _p("chmod_world_writable", r"\bchmod\s+(-[a-zA-Z]+\s+)?[0-7]*777\b", DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.75, flags=0),
     _p("dd_disk_write", r"\bdd\s+.*\bof=/dev/", DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.93, flags=0),
     _p("sudo_elevation", r"\bsudo\b", DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.70, flags=0),
-    # Credential-file-access-via-shell patterns used to live here
-    # (shell_ssh_key_access / shell_aws_credential_access /
-    # shell_shadow_sudoers_access), but agentguard/policy/engine.py's
-    # credential_access rule now scans every parameter value
-    # unconditionally via is_credential_path() (see engine.py's Rule 4
-    # comment) — a strict superset of these three paths (also covers
-    # id_ecdsa/id_dsa/known_hosts/.aws/config/.env/.netrc/passwd/
-    # credentials.json and cert/key file extensions). Keeping duplicate
-    # patterns here caused shell_command_policy to "steal" the match ahead
-    # of credential_access for a plain file.read action, mis-attributing
-    # the block to the wrong rule/MITRE-ATLAS mapping.
+    # A code-review finding: this codebase's own credential_access rule
+    # (policy/engine.py Rule 5, is_credential_path()) is NOT a superset of
+    # what the shell_ssh_key_access / shell_aws_credential_access /
+    # shell_shadow_sudoers_access patterns previously here covered, despite
+    # a comment that used to claim it was — is_credential_path only matches
+    # a parameter value that IS (or ends with) a credential path, not one
+    # that CONTAINS one alongside other shell syntax. "cat ~/.ssh/id_rsa >
+    # /tmp/exfil" evaded it entirely; live-verified against the native
+    # matcher. Restored here as a single pattern rather than three, scoped
+    # to require an actual shell read/transfer verb before the credential
+    # path (not just a bare path) specifically so it does NOT re-trigger
+    # the original mis-attribution problem: a plain file.read action whose
+    # only parameter value IS the bare path "~/.ssh/id_rsa" has no verb to
+    # match, so it still falls through to Rule 5/credential_access as
+    # before, not "stolen" by this rule ahead of it. .ssh/.aws match the
+    # directory itself (not just specific filenames within it), since
+    # `tar -czf - ~/.aws | base64` exfiltrates the whole directory, not one
+    # named file.
+    _p(
+        "shell_credential_exfiltration",
+        r"\b(?:cat|less|more|head|tail|cp|mv|scp|rsync|nc|ncat|socat|base64|xxd|od"
+        r"|tar|zip|gzip|curl|wget|mail|sendmail|python3?|perl|ruby|node)\b[^\n]*"
+        r"(?:\.ssh\b|\.aws\b|/etc/(?:passwd|shadow|sudoers)\b|\.netrc\b|credentials\.json\b)",
+        DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.88,
+    ),
 ]
 
 

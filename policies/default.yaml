@@ -60,7 +60,18 @@ policy:
     - "http_post"
 
   session_limits:
-    max_actions: 100
+    # max_actions is a coarse circuit-breaker against a genuinely runaway
+    # loop, not a per-conversation cap — the LLM API proxy path
+    # (agentguard/proxy/dependencies.py) deliberately derives session_id
+    # from a hash of the auth credential, not a client-supplied header (a
+    # pentest found the header trivially spoofable to reset lockout/rate
+    # limiting), which means a proxied client's session_id is effectively
+    # permanent for the life of that credential, not one conversation. 100
+    # was tuned for the per-conversation case and made every proxied
+    # deployment hard-lock within one normal working session with no
+    # automatic recovery. max_blocked is the meaningful misbehavior signal
+    # here — leave it tight.
+    max_actions: 5000
     max_blocked: 10
 
   # ABAC: in production every agent will be registered with an explicit agent_id.
