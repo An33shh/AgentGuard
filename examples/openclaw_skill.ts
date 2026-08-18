@@ -11,23 +11,35 @@
  *   analyzer before OpenClaw executes it. If AgentGuard returns "block",
  *   the skill throws and OpenClaw never runs the original tool.
  *
- * Fails closed: if AgentGuard is unreachable or errors, the tool call is
- * blocked rather than silently allowed. AgentGuard's proxy sits inline in
- * the request path (every tool call passes through it), which puts it in
- * the same category as a WAF or an authorization layer, not a passive
- * monitoring system like a SIEM — AWS's own WAF/ALB integration defaults
- * to the same choice (an unreachable WAF is treated as if the request
- * were malicious), with fail-open available only as a deliberate, monitored
- * opt-in, never the default. If your threat model genuinely needs
- * availability over enforcement for this integration, override
- * FAIL_MODE below — but do it deliberately, not by deleting this comment.
+ * Fails closed by default when AgentGuard is unreachable, but not
+ * blanket-closed: FAIL_MODE="tiered" (the default) classifies each pending
+ * tool call locally against a conservative destructive/credential pattern
+ * set and fails closed only for that high-stakes tier, failing open (with
+ * a loud console warning) for everything else. This is the risk-tiered
+ * design AgentGuard's proxy itself doesn't need (it's reachable, so it can
+ * always ask the real analyzer) — it exists here specifically for the
+ * window where AgentGuard is down and the skill has to decide on its own.
+ * AgentGuard's proxy sits inline in the request path (every tool call
+ * passes through it), which puts it in the same category as a WAF or an
+ * authorization layer, not a passive monitoring system like a SIEM —
+ * AWS's own WAF/ALB integration defaults to the analogous choice
+ * (unreachable WAF = treat request as malicious) for exactly this reason.
+ * FAIL_MODE="closed"/"open" remain available as deliberate, blanket
+ * overrides for operators who want the simpler all-or-nothing behavior —
+ * flip it deliberately, not by deleting this comment.
  *
- * Long-term direction (not yet implemented here — tracked in
- * tasks/todo.md): per-tool-call risk tiering instead of one binary switch
- * for the whole skill, e.g. fail closed for shell/credential-shaped tool
- * calls and fail open for low-stakes reads. Needs a decision on where the
- * classification logic lives (duplicated in TS vs. sourced from
- * agentguard/analyzer/patterns.py) before it's worth building.
+ * The local classifier (isHighStakes, below) is a conservative SUBSET of
+ * agentguard/analyzer/patterns.py's DESTRUCTIVE_SHELL/CREDENTIAL
+ * categories, duplicated here rather than fetched at runtime — an
+ * AgentGuard-unreachable code path can't depend on fetching anything from
+ * AgentGuard. Keep it loosely in sync by hand: if patterns.py gains a new
+ * DESTRUCTIVE_SHELL/CREDENTIAL pattern that materially changes what
+ * "high-stakes" means, mirror it here too. This was weighed against
+ * generating this list from patterns.py at build time — rejected for now
+ * as unwarranted complexity for one example skill file with no existing
+ * codegen pipeline; drift here only makes the outage fallback slightly
+ * more permissive than production, never less safe than a full
+ * FAIL_MODE="open" outage would already be.
  *
  * Usage in OpenClaw config (workspace/skills/agentguard.ts):
  *   Import and call guardToolCall() from a custom skill that wraps your
@@ -38,11 +50,52 @@ const AGENTGUARD_API_URL =
   process.env.AGENTGUARD_API_URL ?? "http://localhost:8747";
 const AGENTGUARD_API_TOKEN = process.env.AGENTGUARD_API_TOKEN ?? "";
 
-// Set to "open" to allow tool calls through when AgentGuard is unreachable
-// instead of blocking them. Fail-closed (the default) means an AgentGuard
-// outage stops the agent; fail-open means it keeps running unmonitored
-// until AgentGuard comes back. See the module comment above before flipping this.
-const FAIL_MODE: "closed" | "open" = "closed";
+// "tiered" (default): fail closed for high-stakes calls (see
+// isHighStakes), fail open for everything else, when AgentGuard is
+// unreachable. "closed": fail closed for every call, no exceptions.
+// "open": fail open for every call. See the module comment above.
+type FailMode = "tiered" | "closed" | "open";
+const FAIL_MODE: FailMode = "tiered";
+
+/**
+ * Conservative, LOCAL-ONLY classifier used exclusively during an
+ * AgentGuard outage (handleUnavailable) to decide whether THIS tool call
+ * is high-stakes enough to fail closed. Not a replacement for AgentGuard's
+ * real analysis (LLM intent analysis, prompt-injection scanning, ABAC) —
+ * those only run when AgentGuard is reachable, which is the normal case.
+ */
+const HIGH_STAKES_PATTERNS: RegExp[] = [
+  // Destructive shell (mirrors DetectionCategory.DESTRUCTIVE_SHELL).
+  // Lookaheads, not sequential groups — a combined single flag like "-rf"
+  // must match both the recursive and force checks against the SAME
+  // token; two sequential groups (an earlier draft of this pattern) miss
+  // that case entirely, since both letters get consumed by the first
+  // group and there's no second flag left for the second group to match.
+  /(?<!-)\brm\s+(?=.*(?:-[a-zA-Z]*r[a-zA-Z]*\b|--recursive\b))(?=.*(?:-[a-zA-Z]*f[a-zA-Z]*\b|--force\b)).+/i,
+  /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, // fork bomb
+  /(?:curl|wget)\s+.*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/i,
+  /\bchmod\s+(?:-[a-zA-Z]+\s+)?[0-7]*777\b/,
+  /\bdd\s+.*\bof=\/dev\//,
+  /\bsudo\b/,
+  // Credentials (mirrors DetectionCategory.CREDENTIAL)
+  /-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/,
+  /\b(?:sk-ant-|sk-|ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16})[A-Za-z0-9\-_]{10,}/,
+  /(?:password|passwd|secret|api[_-]?key|token)\s*[=:]\s*['"]\S{8,}['"]/i,
+  /\.ssh\/|\.aws\/credentials|\.netrc\b|id_rsa|id_ecdsa|id_dsa|\bshadow\b|\bsudoers\b/i,
+];
+
+function isHighStakes(
+  toolName: string,
+  parameters: Record<string, unknown>
+): boolean {
+  const haystack = [
+    toolName,
+    ...Object.values(parameters).map((v) =>
+      typeof v === "string" ? v : JSON.stringify(v)
+    ),
+  ].join("\n");
+  return HIGH_STAKES_PATTERNS.some((re) => re.test(haystack));
+}
 
 interface InterceptRequest {
   tool_name: string;
@@ -138,11 +191,11 @@ export async function guardToolCall(
       body: JSON.stringify(body),
     });
   } catch (err) {
-    return handleUnavailable(toolName, sessionId, err);
+    return handleUnavailable(toolName, parameters, sessionId, err);
   }
 
   if (!res.ok) {
-    return handleUnavailable(toolName, sessionId, `HTTP ${res.status}`);
+    return handleUnavailable(toolName, parameters, sessionId, `HTTP ${res.status}`);
   }
 
   const result: InterceptResponse = await res.json();
@@ -163,19 +216,27 @@ export async function guardToolCall(
 
 function handleUnavailable(
   toolName: string,
+  parameters: Record<string, unknown>,
   sessionId: string,
   cause: unknown
 ): InterceptResponse {
-  if (FAIL_MODE === "closed") {
+  const highStakes = FAIL_MODE === "tiered" && isHighStakes(toolName, parameters);
+
+  if (FAIL_MODE === "closed" || highStakes) {
     throw new AgentGuardUnavailableError(toolName, cause);
   }
+
+  const why =
+    FAIL_MODE === "tiered"
+      ? "tiered fail-mode judged this call low-stakes"
+      : 'FAIL_MODE is "open"';
   console.warn(
-    `[AgentGuard] Unreachable (${String(cause)}) — FAIL_MODE is "open", allowing ${toolName} unmonitored`
+    `[AgentGuard] Unreachable (${String(cause)}) — ${why}, allowing ${toolName} unmonitored`
   );
   return {
     decision: "allow",
     risk_score: 0,
-    reason: `AgentGuard unreachable — failed open: ${String(cause)}`,
+    reason: `AgentGuard unreachable — failed open (${FAIL_MODE}): ${String(cause)}`,
     event_id: "",
     session_id: sessionId,
     mitre_technique: null,
