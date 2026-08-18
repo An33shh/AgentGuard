@@ -103,8 +103,6 @@ def _check_policy() -> dict:
     try:
         from api.dependencies import get_policy_engine_instance
         engine = get_policy_engine_instance()
-        if engine._config is None:
-            return {"status": "unhealthy", "error": "policy not loaded"}
         return {
             "status": "healthy",
             "name": engine._config.name,

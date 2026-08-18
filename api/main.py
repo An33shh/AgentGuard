@@ -121,10 +121,18 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc: HTTPException):
+        # Starlette's stub types HTTPException.detail as str | None, which
+        # made a prior review agent conclude the dict branch below was
+        # statically unreachable (mypy --warn-unreachable agreed) — but
+        # AgentGuardHTTPError (agentguard/core/errors.py) passes a dict
+        # through HTTPException.__init__(detail=...) at runtime regardless
+        # of what the stub claims, and every structured-error route (e.g.
+        # GET /insights/{event_id}'s 404) depends on it. Removing this
+        # branch on the type checker's say-so silently turned every one of
+        # those into error_code=INTERNAL_ERROR — caught by
+        # test_get_insight_not_found_returns_structured_error, not by mypy.
         if isinstance(exc.detail, dict) and "error_code" in exc.detail:
             content = exc.detail
-        elif isinstance(exc.detail, str):
-            content = {"error_code": "INTERNAL_ERROR", "message": exc.detail}
         else:
             content = {"error_code": "INTERNAL_ERROR", "message": str(exc.detail)}
         return JSONResponse(

@@ -30,11 +30,3 @@ class PolicyViolationError(AgentGuardError):
 
 class AnalyzerError(AgentGuardError):
     """Raised when the intent analyzer fails."""
-
-
-class LedgerError(AgentGuardError):
-    """Raised when the event ledger encounters an error."""
-
-
-class ConfigurationError(AgentGuardError):
-    """Raised when AgentGuard is misconfigured."""

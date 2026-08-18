@@ -175,18 +175,14 @@ export async function getAgentGraph(agentId: string): Promise<AgentGraphData> {
 
 // ── Health ─────────────────────────────────────────────
 
-export async function getHealth(): Promise<{ status: string }> {
-  return fetchAPI<{ status: string }>("/api/v1/health");
-}
-
 export interface ReadinessStatus {
   status: "healthy" | "degraded" | "unhealthy";
   components: Record<string, { status: string; [key: string]: unknown }>;
 }
 
-// Unlike getHealth() (liveness — always "healthy" as long as the API
-// process itself is up), this actually checks DB/Redis/policy/analyzer —
-// the real signal for "is monitoring actually working." Returns a 503 when
+// Actually checks DB/Redis/policy/analyzer — the real signal for "is
+// monitoring actually working," unlike a bare liveness check that's
+// "healthy" as long as the API process itself is up. Returns a 503 when
 // unhealthy, which fetchAPI turns into a thrown ApiError; callers should
 // catch and treat that the same as "unhealthy".
 export async function getReadiness(): Promise<ReadinessStatus> {

@@ -299,6 +299,7 @@ def extract_request_context(
                 "proxy_framework_signal_mismatch",
                 claimed_framework=mismatch.claimed_framework,
                 missing_markers=sorted(mismatch.missing_markers),
+                observed_tool_names=sorted(mismatch.observed_tool_names),
                 session_id=session_id,
                 detail=(
                     "User-Agent claims a known client but declared tool names "
