@@ -65,12 +65,24 @@ export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
     offsetRef.current = offset;
   }, [offset]);
 
+  // setFilters gets a new identity every time the URL changes (it closes
+  // over useSearchParams()'s current snapshot — see useEventsFilterState).
+  // The session_id debounce below intentionally only re-arms on
+  // sessionIdInput changes, so without this ref it can fire with a
+  // stale/pre-dated snapshot and clobber a filter set by another control
+  // in the same 400ms window. Always go through the ref so the debounce
+  // callback calls whichever setFilters is current when it actually fires.
+  const setFiltersRef = useRef(setFilters);
+  useEffect(() => {
+    setFiltersRef.current = setFilters;
+  }, [setFilters]);
+
   // Debounced session_id filter — every other filter change is immediate
   // (selects/date pickers don't need debouncing).
   useEffect(() => {
     const id = setTimeout(() => {
       if (sessionIdInput !== (filters.session_id ?? "")) {
-        setFilters({ session_id: sessionIdInput || undefined });
+        setFiltersRef.current({ session_id: sessionIdInput || undefined });
       }
     }, 400);
     return () => clearTimeout(id);
@@ -92,12 +104,51 @@ export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
     []
   );
 
-  // Refetch page 1 whenever the URL-driven filters change (session_id,
-  // decision, min/max risk, since/until) — every filter is server-applied,
-  // no client-side .filter() anywhere.
+  // The last query actually submitted to /events/search — needed so a
+  // filter change while in search mode can re-run the SAME search instead
+  // of losing it (see the filter-change effect below).
+  const activeQueryRef = useRef("");
+
+  const runSearch = useCallback(async (query: string, activeFilters: EventsFilter) => {
+    setSearchPending(true);
+    setSearchError(null);
+    try {
+      const data = await searchEvents(query, activeFilters, 200);
+      setEvents(data);
+      setIsServerSearch(true);
+      activeQueryRef.current = query;
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Search failed");
+      setIsServerSearch(false);
+    } finally {
+      setSearchPending(false);
+    }
+  }, []);
+
+  // Apply page-1 data (or a re-run search) whenever the URL-driven filters
+  // change (session_id, agent_id, decision, min/max risk, since/until) —
+  // every filter is server-applied, no client-side .filter() anywhere.
+  // Skips its very first run: that run always fires on mount, and mount's
+  // `filters` is exactly what the server component already fetched into
+  // `initialEvents` for this same URL — refetching it is a redundant
+  // request that also throws away the SSR-rendered rows in favor of a
+  // client loading flash.
+  const isFirstFilterRun = useRef(true);
   useEffect(() => {
-    if (isServerSearch) return;
-    refetchFirstPage(filters);
+    if (isFirstFilterRun.current) {
+      isFirstFilterRun.current = false;
+      return;
+    }
+    if (isServerSearch) {
+      // Previously this branch just returned, so the search's own filter
+      // controls stayed visibly live (URL updated, selects showed the new
+      // value) while the actual displayed rows silently kept the OLD
+      // filter's results — filters and search never composed. Re-run the
+      // same query against the new filters instead.
+      runSearch(activeQueryRef.current, filters);
+    } else {
+      refetchFirstPage(filters);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.agent_id, filters.session_id, filters.decision, filters.min_risk, filters.max_risk, filters.since, filters.until]);
 
@@ -109,6 +160,12 @@ export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
       setEvents((prev) => [...prev, ...next]);
       setOffset((prev) => prev + next.length);
       setHasMore(next.length === EVENTS_PAGE_SIZE);
+    } catch {
+      // An unbounded retry loop was the original bug here: hasMore stayed
+      // true and the sentinel (still mounted, still in view) re-fired the
+      // IntersectionObserver the instant `loading` flipped back to false.
+      // Stop offering more pages on failure instead of retrying forever.
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
@@ -158,18 +215,7 @@ export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
       setSearchError(null);
       return;
     }
-    setSearchPending(true);
-    setSearchError(null);
-    searchEvents(q, filters, 200)
-      .then((data) => {
-        setEvents(data);
-        setIsServerSearch(true);
-      })
-      .catch((err) => {
-        setSearchError(err instanceof Error ? err.message : "Search failed");
-        setIsServerSearch(false);
-      })
-      .finally(() => setSearchPending(false));
+    runSearch(q, filters);
   };
 
   const handleClearSearch = () => {
@@ -182,7 +228,17 @@ export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
   const inputClass =
     "bg-[#141F33] border border-[#1C2844] rounded-lg px-3 py-2 text-sm text-[#A0AEBB] placeholder-[#3A4A5C] focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-colors";
 
-  const toLocalInputValue = (iso?: string) => (iso ? iso.slice(0, 16) : "");
+  // filters.since/until are UTC ISO strings; a <input type="datetime-local">
+  // interprets its `value` as LOCAL wall-clock time with no offset, so
+  // slicing the raw UTC string in directly (the old implementation) made
+  // the field silently redisplay a different time than the user picked,
+  // off by the full UTC offset. Shift into local wall-clock time first.
+  const toLocalInputValue = (iso?: string) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
 
   return (
     <div className="space-y-4">
@@ -226,6 +282,19 @@ export function EventTable({ initialEvents, initialFilters }: EventTableProps) {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
+        {filters.agent_id && (
+          <span className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600/15 text-indigo-400 border border-indigo-600/20 text-xs font-mono">
+            agent: {filters.agent_id.length > 20 ? `${filters.agent_id.slice(0, 20)}…` : filters.agent_id}
+            <button
+              type="button"
+              onClick={() => setFilters({ agent_id: undefined })}
+              aria-label="Clear agent filter"
+              className="text-indigo-400/70 hover:text-indigo-300 transition-colors"
+            >
+              ×
+            </button>
+          </span>
+        )}
         <input
           type="text"
           placeholder="Filter by session_id…"
