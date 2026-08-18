@@ -13,7 +13,7 @@ import structlog
 
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.local_classifier import LocalClassifier
-from agentguard.core.models import Action, ActionType, RiskAssessment
+from agentguard.core.models import Action, RiskAssessment
 
 _CACHE_MAX_SIZE = 1024
 
@@ -26,19 +26,28 @@ def _cache_key(action: Action, agent_goal: str) -> str:
 
 logger = structlog.get_logger(__name__)
 
-# Action types that must BLOCK on analyzer failure (fail-closed)
-_FAIL_CLOSED_TYPES: frozenset[ActionType] = frozenset({
-    ActionType.CREDENTIAL_ACCESS,
-    ActionType.SHELL_COMMAND,
-    ActionType.MEMORY_WRITE,
-})
-
 
 def _fallback_assessment(action: Action, reason: str, latency_ms: float) -> RiskAssessment:
-    """Fail-closed: sensitive action types default to BLOCK on any error."""
-    score = 1.0 if action.type in _FAIL_CLOSED_TYPES else 0.5
+    """Fail-closed: every action type defaults to BLOCK on any analyzer error.
+
+    Used to only fail-closed for a hardcoded subset of "sensitive" types
+    (CREDENTIAL_ACCESS/SHELL_COMMAND/MEMORY_WRITE), with everything else
+    (FILE_READ, FILE_WRITE, HTTP_REQUEST, TOOL_CALL — the majority of real
+    traffic) falling back to risk_score=0.5. That's below the default
+    review_threshold (0.60), so an analyzer outage silently ALLOWed most
+    action types with no BLOCK and no REVIEW flag — Decision.REVIEW doesn't
+    actually stop anything either (every adapter's before_tool_call only
+    special-cases Decision.BLOCK), so a partial fix raising the fallback
+    score into review-territory wouldn't have closed the real gap: the
+    entire semantic-judgment layer this analyzer exists to provide would
+    still be invisibly absent for as long as the outage lasted. An outage
+    is rare and by definition already survived one hedge/retry attempt
+    (_hedged_analyze) before reaching here — failing loud and blocking
+    everything until it's fixed is the correct tradeoff for a security
+    product, not a quiet, partial degradation of unknown duration.
+    """
     return RiskAssessment(
-        risk_score=score,
+        risk_score=1.0,
         reason=reason,
         indicators=["analyzer_error"],
         is_goal_aligned=False,
@@ -55,7 +64,7 @@ class IntentAnalyzer:
       1. LocalClassifier  — zero-latency pattern match (catches obvious prompt injection)
       2. Backend.assess() — LLM risk scoring via whichever provider is configured
       3. Request hedging  — parallel call fires after hedge_after seconds if first is slow
-      4. Fail-closed      — sensitive action types default to BLOCK on any error
+      4. Fail-closed      — every action type defaults to BLOCK on any error
 
     Supports any backend implementing AnalyzerBackend:
       AnthropicBackend, OpenAICompatBackend (OpenAI, Ollama, Groq, LM Studio, etc.)

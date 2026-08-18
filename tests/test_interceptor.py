@@ -342,11 +342,12 @@ class TestShellCommandPolicyEndToEnd:
 
     @pytest.mark.asyncio
     async def test_shell_command_fail_closed_path_now_reachable(self) -> None:
-        """Regression guard for a previously-dead code path: SHELL_COMMAND is
-        in IntentAnalyzer._FAIL_CLOSED_TYPES (risk_score=1.0 on analyzer
-        error), but was unreachable while deny_tools blanket-blocked bash
-        before ever calling the analyzer. A benign command now genuinely
-        reaches it, so a real analyzer failure must fail closed here too."""
+        """Regression guard for a previously-dead code path: SHELL_COMMAND
+        fails closed on analyzer error (risk_score=1.0, now true for every
+        action type — see IntentAnalyzer._fallback_assessment), but was
+        unreachable while deny_tools blanket-blocked bash before ever
+        calling the analyzer. A benign command now genuinely reaches it,
+        so a real analyzer failure must fail closed here too."""
         from unittest.mock import AsyncMock, patch
 
         from agentguard.analyzer.backends.anthropic_backend import AnthropicBackend
