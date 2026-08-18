@@ -237,9 +237,7 @@ class ProxyPipeline:
                 blocked = [r for r in results if not r.allowed]
                 if blocked:
                     allowed = [r for r in results if r.allowed]
-                    response_body = handler.build_blocked_response(
-                        response_body, blocked, allowed
-                    )
+                    response_body = handler.build_blocked_response(response_body, blocked)
                     logger.warning(
                         "proxy_tool_calls_blocked",
                         session_id=context.session_id,

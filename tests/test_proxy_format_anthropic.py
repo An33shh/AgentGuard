@@ -107,7 +107,7 @@ class TestBuildBlockedResponse:
     def test_removes_blocked_tool_use(self, handler: AnthropicFormatHandler) -> None:
         tc = ProxyToolCall(id="toolu_01", name="bash", arguments={}, raw={})
         blocked = [ProxyInterceptionResult(tool_call=tc, allowed=False, reason="deny_tools")]
-        result = handler.build_blocked_response(TOOL_USE_RESPONSE, blocked, [])
+        result = handler.build_blocked_response(TOOL_USE_RESPONSE, blocked)
         content_types = [b["type"] for b in result["content"]]
         assert "tool_use" not in content_types
         assert "text" in content_types
@@ -120,20 +120,22 @@ class TestBuildBlockedResponse:
             {"type": "tool_use", "id": "t2", "name": "read", "input": {}},
         ], "stop_reason": "tool_use"}
         tc_blocked = ProxyToolCall(id="t1", name="bash", arguments={}, raw={})
-        tc_allowed = ProxyToolCall(id="t2", name="read", arguments={}, raw={})
         blocked = [ProxyInterceptionResult(tool_call=tc_blocked, allowed=False)]
-        allowed = [ProxyInterceptionResult(tool_call=tc_allowed, allowed=True)]
-        result = handler.build_blocked_response(body, blocked, allowed)
+        result = handler.build_blocked_response(body, blocked)
         tool_use_blocks = [b for b in result["content"] if b.get("type") == "tool_use"]
         assert len(tool_use_blocks) == 1
         assert tool_use_blocks[0]["id"] == "t2"
+        # Regression: this used to unconditionally rewrite stop_reason to
+        # "end_turn" even when an allowed tool_use block survives — telling
+        # the client the turn ended when it still needs to execute "t2".
+        assert result["stop_reason"] == "tool_use"
 
     def test_does_not_mutate_original(self, handler: AnthropicFormatHandler) -> None:
         import copy
         original = copy.deepcopy(TOOL_USE_RESPONSE)
         tc = ProxyToolCall(id="toolu_01", name="bash", arguments={}, raw={})
         blocked = [ProxyInterceptionResult(tool_call=tc, allowed=False)]
-        handler.build_blocked_response(TOOL_USE_RESPONSE, blocked, [])
+        handler.build_blocked_response(TOOL_USE_RESPONSE, blocked)
         assert TOOL_USE_RESPONSE == original
 
 

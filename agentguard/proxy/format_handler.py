@@ -96,11 +96,17 @@ class LLMFormatHandler(ABC):
         self,
         original_response: dict[str, Any],
         blocked_results: list[ProxyInterceptionResult],
-        allowed_results: list[ProxyInterceptionResult],
     ) -> dict[str, Any]:
         """
         Return a modified response with blocked tool calls removed and a
         text explanation injected so the agent loop knows why.
+
+        Implementations must only rewrite the response's stop/finish signal
+        (e.g. Anthropic's stop_reason, OpenAI's finish_reason) to indicate
+        the turn ended when NO tool call survives the filter — if at least
+        one call was allowed, the client still needs to know it must
+        execute it, matching how the streaming path's
+        patch_message_delta_after_block handles the same mixed case.
         """
 
     @abstractmethod
@@ -288,7 +294,6 @@ class OpenAIFormatHandler(LLMFormatHandler, StreamingCapableHandler):
         self,
         original_response: dict[str, Any],
         blocked_results: list[ProxyInterceptionResult],
-        allowed_results: list[ProxyInterceptionResult],
     ) -> dict[str, Any]:
         import copy
         response = copy.deepcopy(original_response)
@@ -603,7 +608,6 @@ class AnthropicFormatHandler(LLMFormatHandler, StreamingCapableHandler):
         self,
         original_response: dict[str, Any],
         blocked_results: list[ProxyInterceptionResult],
-        allowed_results: list[ProxyInterceptionResult],
     ) -> dict[str, Any]:
         import copy
         response = copy.deepcopy(original_response)
@@ -627,7 +631,17 @@ class AnthropicFormatHandler(LLMFormatHandler, StreamingCapableHandler):
         filtered_content.append({"type": "text", "text": explanation})
 
         response["content"] = filtered_content
-        response["stop_reason"] = "end_turn"
+        # Regression found while removing this method's unused
+        # allowed_results param: this used to set stop_reason="end_turn"
+        # unconditionally, even when an allowed tool_use block survives the
+        # filter above — telling the client the turn ended when it still
+        # needs to execute a legitimate tool call, which then silently
+        # never runs. The sibling OpenAIFormatHandler right below already
+        # got this right (only rewrites finish_reason when no tool_calls
+        # remain); this now matches it, and matches the streaming path's
+        # patch_message_delta_after_block for the same mixed case.
+        if not any(isinstance(b, dict) and b.get("type") == "tool_use" for b in filtered_content):
+            response["stop_reason"] = "end_turn"
         return response
 
     def build_inbound_block_response(self, reason: str, model: str) -> dict[str, Any]:
