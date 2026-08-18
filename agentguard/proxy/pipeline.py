@@ -380,6 +380,44 @@ class StreamingProxyPipeline:
                 # but stop the generator; the client sees a clean stream close.
                 return
 
+    async def _resolve_tool_block(
+        self,
+        handler: StreamingCapableHandler,
+        index: int,
+        open_raw: dict[int, list[SSEEvent]],
+        open_meta: dict[int, dict[str, Any]],
+        context: ProxyRequestContext,
+    ) -> tuple[list[bytes], bool]:
+        """Assemble, intercept, and encode the wire bytes for one closed
+        tool-call block. Returns (encoded_events, allowed) — the caller
+        yields the events and folds `allowed` into any_blocked/
+        any_allowed_tool_use. Shared by the BLOCK_STOP path (Anthropic:
+        each block closes individually) and the MESSAGE_DELTA path
+        (OpenAI: every open block closes together, see this class's
+        docstring and format_handler.py's module docstring)."""
+        meta = open_meta[index]
+        tool_call = handler.assemble_tool_call(
+            index, meta["tool_call_id"], meta["tool_name"], "".join(meta["fragments"]),
+        )
+        if self._intercept_tool_calls:
+            result = await _intercept_single(self._interceptor, tool_call, context)
+        else:
+            result = ProxyInterceptionResult(tool_call=tool_call, allowed=True)
+
+        if result.allowed:
+            return [encode_sse_event(e) for e in open_raw[index]], True
+
+        logger.warning(
+            "proxy_stream_tool_call_blocked",
+            tool=tool_call.name,
+            reason=result.reason,
+            session_id=context.session_id,
+        )
+        blocked_events = [
+            encode_sse_event(e) for e in handler.build_blocked_stream_events(index, tool_call, result.reason)
+        ]
+        return blocked_events, False
+
     async def _stream_with_interception(
         self,
         response: httpx.Response,
@@ -423,42 +461,49 @@ class StreamingProxyPipeline:
                 continue
 
             if info.kind == StreamBlockKind.TOOL_BLOCK_DELTA:
-                if info.block_index in open_raw:
-                    open_raw[info.block_index].append(raw_event)
-                    open_meta[info.block_index]["fragments"].append(info.json_fragment or "")
-                else:
-                    # Delta for a block we never saw start — malformed/unexpected
-                    # upstream stream. Forward defensively rather than drop.
-                    logger.warning("proxy_stream_delta_for_unknown_block", block_index=info.block_index)
+                if info.block_index is None:
+                    logger.warning("proxy_stream_delta_missing_index")
                     yield encode_sse_event(raw_event)
+                    continue
+                if info.block_index not in open_raw:
+                    # Implicit start: a provider with no distinct "block
+                    # start" event (OpenAI) signals a new tool call purely
+                    # by a delta carrying a not-yet-seen index — the first
+                    # such delta IS the start. tool_call_id/tool_name may
+                    # still be None here (some OpenAI-compatible providers
+                    # send them in a later delta for the same index, see
+                    # format_handler.py's module docstring); default the
+                    # same way TOOL_BLOCK_START does above, and fill them in
+                    # below if/when they arrive. Also a defensive upgrade
+                    # for any provider: a delta for a block whose explicit
+                    # start event was somehow missed now gets buffered
+                    # instead of leaked unbuffered.
+                    open_raw[info.block_index] = []
+                    open_meta[info.block_index] = {
+                        "tool_call_id": info.tool_call_id or "",
+                        "tool_name": info.tool_name or "unknown",
+                        "fragments": [],
+                    }
+                open_raw[info.block_index].append(raw_event)
+                meta = open_meta[info.block_index]
+                if info.tool_call_id:
+                    meta["tool_call_id"] = info.tool_call_id
+                if info.tool_name:
+                    meta["tool_name"] = info.tool_name
+                meta["fragments"].append(info.json_fragment or "")
                 continue
 
             if info.kind == StreamBlockKind.BLOCK_STOP:
                 index = info.block_index
                 if index is not None and index in open_raw:
                     open_raw[index].append(raw_event)
-                    meta = open_meta[index]
-                    tool_call = handler.assemble_tool_call(
-                        index, meta["tool_call_id"], meta["tool_name"], "".join(meta["fragments"]),
-                    )
-                    if self._intercept_tool_calls:
-                        result = await _intercept_single(self._interceptor, tool_call, context)
-                    else:
-                        result = ProxyInterceptionResult(tool_call=tool_call, allowed=True)
-                    if result.allowed:
+                    events, allowed = await self._resolve_tool_block(handler, index, open_raw, open_meta, context)
+                    for encoded in events:
+                        yield encoded
+                    if allowed:
                         any_allowed_tool_use = True
-                        for buffered in open_raw[index]:
-                            yield encode_sse_event(buffered)
                     else:
                         any_blocked = True
-                        logger.warning(
-                            "proxy_stream_tool_call_blocked",
-                            tool=tool_call.name,
-                            reason=result.reason,
-                            session_id=context.session_id,
-                        )
-                        for blocked_event in handler.build_blocked_stream_events(index, tool_call, result.reason):
-                            yield encode_sse_event(blocked_event)
                     del open_raw[index]
                     del open_meta[index]
                 else:
@@ -468,6 +513,26 @@ class StreamingProxyPipeline:
                 continue
 
             if info.kind == StreamBlockKind.MESSAGE_DELTA:
+                # Resolve any tool-call blocks still open when the
+                # response-level stop/finish signal arrives. This is a
+                # no-op for Anthropic, which explicitly closes each block
+                # via its own BLOCK_STOP event before MESSAGE_DELTA ever
+                # arrives (open_raw should already be empty here). It's
+                # load-bearing for OpenAI: there is no per-block close
+                # event at all, so every open tool call actually gets
+                # resolved right here, all at once — see
+                # format_handler.py's module docstring.
+                for index in sorted(open_raw.keys()):
+                    events, allowed = await self._resolve_tool_block(handler, index, open_raw, open_meta, context)
+                    for encoded in events:
+                        yield encoded
+                    if allowed:
+                        any_allowed_tool_use = True
+                    else:
+                        any_blocked = True
+                open_raw.clear()
+                open_meta.clear()
+
                 # Only rewrite stop_reason when EVERY tool call in this
                 # response was blocked. If at least one was allowed, the
                 # client still needs stop_reason="tool_use" to know it must

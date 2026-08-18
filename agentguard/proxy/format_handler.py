@@ -19,14 +19,37 @@ against a handler that only implements LLMFormatHandler, not
 StreamingCapableHandler — StreamingProxyPipeline.handle_stream() asserts
 isinstance(handler, StreamingCapableHandler) up front (pipeline.py) and
 raises if that doesn't hold. A router for such a handler must reject
-stream:true itself (router_openai.py currently does exactly this, since
-OpenAIFormatHandler doesn't yet implement StreamingCapableHandler — see its
-own module docstring) rather than routing into StreamingProxyPipeline and
-hitting that assert. wrap_as_sse_stream() below is used elsewhere in this
-pipeline for synthesizing synthetic SSE responses (inbound-block/error
+stream:true itself rather than routing into StreamingProxyPipeline and
+hitting that assert (both OpenAIFormatHandler and AnthropicFormatHandler now
+implement StreamingCapableHandler, so this only matters for a future
+provider that doesn't yet). wrap_as_sse_stream() below is used elsewhere in
+this pipeline for synthesizing synthetic SSE responses (inbound-block/error
 messages) mid-stream, not as a buffer-then-wrap fallback for a
-non-streaming-capable handler — building that fallback path is real,
-unimplemented follow-up work, not something to assume already exists.
+non-streaming-capable handler.
+
+OpenAI's Chat Completions streaming format differs structurally from
+Anthropic's in two ways worth knowing before touching OpenAIFormatHandler's
+StreamingCapableHandler methods:
+
+1. No per-block "this tool call is done" event. Anthropic sends an explicit
+   content_block_stop per block; OpenAI has nothing equivalent — every tool
+   call in the response closes simultaneously, signaled only by the single
+   finish_reason chunk at the very end. classify_stream_event() therefore
+   never emits TOOL_BLOCK_START for OpenAI (there's nothing to distinguish
+   it from a later delta without cross-event memory, which the classifier
+   isn't allowed to keep — see StreamingCapableHandler's docstring); every
+   tool_calls-bearing chunk is classified as TOOL_BLOCK_DELTA, and
+   StreamingProxyPipeline treats the first delta for a not-yet-seen index as
+   an implicit start. Resolving every still-open block when MESSAGE_DELTA
+   arrives (also added for this) is what actually closes OpenAI's tool
+   calls; it's a no-op for Anthropic, which should have already closed its
+   blocks via content_block_stop by then.
+2. tool_calls[].id/function.name aren't guaranteed to arrive in the same
+   chunk as the first argument fragment for that index — confirmed against
+   real-world OpenAI-compatible gateway behavior, not just the spec's
+   wording. TOOL_BLOCK_DELTA's tool_call_id/tool_name fields (unused by
+   Anthropic, which always has both at TOOL_BLOCK_START) let a later delta
+   fill them in once they do arrive.
 """
 
 from __future__ import annotations
@@ -37,12 +60,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import structlog
+
 from agentguard.proxy.models import (
     ProxyInboundScanTarget,
     ProxyInterceptionResult,
     ProxyToolCall,
 )
 from agentguard.proxy.sse import SSEEvent
+
+logger = structlog.get_logger(__name__)
 
 
 class LLMFormatHandler(ABC):
@@ -204,7 +231,7 @@ class StreamingCapableHandler(ABC):
 # OpenAI Chat Completions  (/v1/chat/completions)
 # ---------------------------------------------------------------------------
 
-class OpenAIFormatHandler(LLMFormatHandler):
+class OpenAIFormatHandler(LLMFormatHandler, StreamingCapableHandler):
     """Handles OpenAI Chat Completions API format."""
 
     def extract_inbound_texts(self, body: dict[str, Any]) -> list[ProxyInboundScanTarget]:
@@ -317,6 +344,187 @@ class OpenAIFormatHandler(LLMFormatHandler):
         # Phase 1: force non-streaming to avoid SSE buffering complexity
         normalized["stream"] = False
         return normalized
+
+    # -- StreamingCapableHandler -------------------------------------------
+    #
+    # See this module's top-level docstring for the two structural
+    # differences from Anthropic's format these methods work around:
+    # no per-block close event (every tool call resolves together, at the
+    # finish_reason chunk), and id/function.name not guaranteed to arrive
+    # in the same chunk as the first argument fragment for that index.
+
+    def normalize_stream_request(self, body: dict[str, Any]) -> dict[str, Any]:
+        import copy
+        normalized = copy.deepcopy(body)
+        normalized["stream"] = True
+        return normalized
+
+    def classify_stream_event(self, event: SSEEvent) -> StreamEventInfo:
+        if event.is_comment:
+            return StreamEventInfo(kind=StreamBlockKind.PING)
+
+        # OpenAI's stream terminator — a literal "[DONE]" payload, not JSON,
+        # and (unlike Anthropic) OpenAI never sets the SSE `event:` field at
+        # all, so classification here is purely data-shape-driven throughout
+        # this method.
+        if event.data.strip() == "[DONE]":
+            return StreamEventInfo(kind=StreamBlockKind.STREAM_END)
+
+        try:
+            payload = json.loads(event.data) if event.data else {}
+        except json.JSONDecodeError:
+            return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            # e.g. the trailing usage-only chunk some gateways send when
+            # stream_options.include_usage is set (choices: [], top-level
+            # usage) — nothing to classify, forward untouched. Also covers
+            # any response shaped with zero choices for other reasons.
+            return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+
+        # Only choices[0] is handled — this streaming implementation
+        # assumes n=1 (a single completion stream), matching the vast
+        # majority of real tool-calling clients. extract_tool_calls()
+        # (the non-streaming path) does handle multiple choices; per-choice
+        # buffering state for n>1 streaming is unimplemented follow-up work.
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+
+        if choice.get("finish_reason") is not None:
+            return StreamEventInfo(kind=StreamBlockKind.MESSAGE_DELTA)
+
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+
+        tool_calls = delta.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            if len(tool_calls) > 1:
+                # Not observed in practice — real-world providers stream
+                # parallel tool calls as separate, discrete chunks
+                # distinguished by index, never bundled into one delta's
+                # tool_calls array — but classify_stream_event can only
+                # return one StreamEventInfo per raw event, so if this ever
+                # occurs, only the first entry is processed. Logged loudly
+                # rather than silently, since silently dropping a second
+                # tool call would mean it's never scanned.
+                logger.error(
+                    "proxy_stream_multiple_tool_calls_in_one_chunk",
+                    count=len(tool_calls),
+                )
+            tc = tool_calls[0]
+            if not isinstance(tc, dict):
+                return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+            index = tc.get("index")
+            if not isinstance(index, int):
+                # Every real provider includes index — it's the only
+                # correlation key across chunks. Without it, forward
+                # defensively rather than guess (matches
+                # TOOL_BLOCK_START-missing-index's precedent below in
+                # AnthropicFormatHandler / StreamingProxyPipeline).
+                logger.warning("proxy_stream_tool_call_missing_index")
+                return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+            fn_raw = tc.get("function")
+            fn: dict[str, Any] = fn_raw if isinstance(fn_raw, dict) else {}
+            return StreamEventInfo(
+                kind=StreamBlockKind.TOOL_BLOCK_DELTA,
+                block_index=index,
+                tool_call_id=tc.get("id") or None,
+                tool_name=fn.get("name") or None,
+                json_fragment=fn.get("arguments") or "",
+            )
+
+        # Plain text, a role-only first chunk, a refusal/reasoning_content
+        # field, or an empty delta with no finish_reason yet (a
+        # heartbeat-shaped chunk some gateways send) — nothing to intercept.
+        return StreamEventInfo(kind=StreamBlockKind.PASSTHROUGH)
+
+    def assemble_tool_call(
+        self, block_index: int, tool_call_id: str, tool_name: str, accumulated_json: str,
+    ) -> ProxyToolCall:
+        try:
+            args = json.loads(accumulated_json or "{}")
+        except json.JSONDecodeError:
+            args = {"_raw": accumulated_json}
+        return ProxyToolCall(
+            id=tool_call_id,
+            name=tool_name,
+            arguments=args,
+            raw={
+                "id": tool_call_id, "type": "function",
+                "function": {"name": tool_name, "arguments": accumulated_json},
+            },
+        )
+
+    def build_blocked_stream_events(
+        self, block_index: int, tool_call: ProxyToolCall, reason: str,
+    ) -> list[SSEEvent]:
+        explanation = (
+            f"[AgentGuard] Tool call '{tool_call.name}' was blocked by the security policy. "
+            f"Reason: {reason or 'policy violation'}."
+        )
+        return [
+            SSEEvent(data=json.dumps({
+                "id": "agentguard-blocked",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "agentguard",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": explanation},
+                    "finish_reason": None,
+                }],
+            })),
+        ]
+
+    def patch_message_delta_after_block(self, event: SSEEvent) -> SSEEvent:
+        try:
+            payload = json.loads(event.data) if event.data else {}
+        except json.JSONDecodeError:
+            return event
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return event
+        choice = choices[0]
+        if isinstance(choice, dict) and choice.get("finish_reason") == "tool_calls":
+            # The tool_calls this finish_reason pointed at may have been
+            # replaced by a text explanation — claiming "tool_calls" with
+            # nothing left to call leaves the client unable to resume the
+            # agent loop. "stop" matches build_blocked_response's
+            # non-streaming equivalent for this same handler.
+            patched_choice = {**choice, "finish_reason": "stop"}
+            payload = {**payload, "choices": [patched_choice, *choices[1:]]}
+            return SSEEvent(event=event.event, data=json.dumps(payload), id=event.id)
+        return event
+
+    def wrap_as_sse_stream(self, response_body: dict[str, Any]) -> list[SSEEvent]:
+        model = response_body.get("model", "unknown")
+        resp_id = response_body.get("id", "agentguard")
+        events: list[SSEEvent] = []
+        for choice in response_body.get("choices", []):
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            content = message.get("content", "") if isinstance(message, dict) else ""
+            events.append(SSEEvent(data=json.dumps({
+                "id": resp_id, "object": "chat.completion.chunk", "created": 0, "model": model,
+                "choices": [{
+                    "index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None,
+                }],
+            })))
+            if content:
+                events.append(SSEEvent(data=json.dumps({
+                    "id": resp_id, "object": "chat.completion.chunk", "created": 0, "model": model,
+                    "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+                })))
+            events.append(SSEEvent(data=json.dumps({
+                "id": resp_id, "object": "chat.completion.chunk", "created": 0, "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": choice.get("finish_reason", "stop")}],
+            })))
+        events.append(SSEEvent(data="[DONE]"))
+        return events
 
 
 # ---------------------------------------------------------------------------
