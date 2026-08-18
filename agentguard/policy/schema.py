@@ -148,6 +148,35 @@ class PolicyConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_demotion_actually_tightens(self) -> PolicyConfig:
+        """demotion.demoted_{risk,review}_threshold must be strictly lower
+        than the base risk_threshold/review_threshold they replace once a
+        session accumulates enough blocks — DemotionConfig's own validator
+        only checks its two fields are ordered correctly *relative to each
+        other*, not relative to the base thresholds. Without this, a policy
+        YAML with risk_threshold: 0.75 and demotion.demoted_risk_threshold:
+        0.90 loaded without error, and a session with a demonstrated
+        pattern of hostile behavior would get MORE lenient thresholds
+        instead of stricter ones — silently inverting demotion into
+        promotion. Validated unconditionally (not just when demotion.enabled
+        is currently true) so toggling it on later doesn't activate a
+        landmine that was never checked when the thresholds were written.
+        """
+        if self.demotion.demoted_risk_threshold >= self.risk_threshold:
+            raise ValueError(
+                f"demotion.demoted_risk_threshold ({self.demotion.demoted_risk_threshold}) "
+                f"must be less than risk_threshold ({self.risk_threshold}) — demotion is "
+                "meant to tighten thresholds for sessions with repeated violations, not loosen them"
+            )
+        if self.demotion.demoted_review_threshold >= self.review_threshold:
+            raise ValueError(
+                f"demotion.demoted_review_threshold ({self.demotion.demoted_review_threshold}) "
+                f"must be less than review_threshold ({self.review_threshold}) — demotion is "
+                "meant to tighten thresholds for sessions with repeated violations, not loosen them"
+            )
+        return self
+
     @classmethod
     def from_yaml(cls, path: str) -> PolicyConfig:
         import yaml

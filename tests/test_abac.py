@@ -155,6 +155,51 @@ class TestSessionDemotion:
         assert risk == 0.40
         assert review == 0.25
 
+    def test_demoted_thresholds_looser_than_base_rejected(self) -> None:
+        """Regression test: DemotionConfig's own validator only checked
+        demoted_review_threshold < demoted_risk_threshold — the two
+        demoted fields relative to each other — never that either was
+        actually tighter than the base threshold it's meant to replace. A
+        policy with risk_threshold=0.75 and demoted_risk_threshold=0.90
+        used to load without error, silently inverting demotion into
+        promotion for sessions with a demonstrated pattern of hostile
+        behavior."""
+        with pytest.raises(ValueError, match="demoted_risk_threshold"):
+            PolicyConfig(
+                name="inverted-demotion",
+                risk_threshold=0.75,
+                review_threshold=0.60,
+                demotion=DemotionConfig(
+                    enabled=True,
+                    demoted_risk_threshold=0.90,  # looser than risk_threshold — invalid
+                    demoted_review_threshold=0.35,
+                ),
+            )
+
+        with pytest.raises(ValueError, match="demoted_review_threshold"):
+            PolicyConfig(
+                name="inverted-demotion-review",
+                risk_threshold=0.75,
+                review_threshold=0.60,
+                demotion=DemotionConfig(
+                    enabled=True,
+                    demoted_risk_threshold=0.50,
+                    demoted_review_threshold=0.65,  # looser than review_threshold — invalid
+                ),
+            )
+
+    def test_demoted_thresholds_validated_even_when_disabled(self) -> None:
+        """Validated unconditionally, not just when demotion.enabled is
+        true — otherwise toggling it on later activates a landmine that
+        was never checked when the thresholds were originally written."""
+        with pytest.raises(ValueError, match="demoted_risk_threshold"):
+            PolicyConfig(
+                name="inverted-but-disabled",
+                risk_threshold=0.75,
+                review_threshold=0.60,
+                demotion=DemotionConfig(enabled=False, demoted_risk_threshold=0.90),
+            )
+
     def test_demotion_disabled_always_uses_base_thresholds(self) -> None:
         config = PolicyConfig(
             name="no-demotion",
