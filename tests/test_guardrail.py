@@ -287,6 +287,33 @@ class TestDeepAnalysis:
         assert result.verdict == GuardrailVerdict.ALLOW
 
     @pytest.mark.asyncio
+    async def test_deep_analysis_cannot_downgrade_high_confidence_credential_co_occurring_with_lower_confidence_pii(self):
+        # Regression test for a follow-up review finding on the injection
+        # override-safety fix above: skip_deep's all() gate only skips deep
+        # analysis when EVERY local detection is high-confidence-sensitive.
+        # A certain AWS-key match (0.98) co-occurring with a lower-confidence
+        # email match (0.75) fails that all() check, so deep analysis still
+        # runs — and without also checking "was ANY single detection
+        # high-confidence-sensitive" (not just the injection-signal check),
+        # step 4 would hand the verdict entirely to deep_verdict, letting an
+        # LLM call reading attacker-supplied text downgrade an objectively
+        # certain credential match from REDACT to ALLOW.
+        mock_deep = AsyncMock()
+        mock_deep.analyze.return_value = (GuardrailVerdict.ALLOW, [], 0.05)
+        config = GuardrailConfig(mode=GuardrailMode.ENFORCE, deep_analysis=True)
+        guardrail = PromptGuardrail(config=config)
+        guardrail._deep = mock_deep
+
+        result = await guardrail.scan(
+            "Use AKIAIOSFODNN7EXAMPLE to access AWS, contact me at test@example.com",
+            ContextType.USER_INPUT,
+        )
+        mock_deep.analyze.assert_called_once()  # not skipped — email is below the skip_deep threshold
+        # But the certain credential match must still floor the verdict —
+        # deep analysis's ALLOW may not override it.
+        assert result.verdict == GuardrailVerdict.REDACT
+
+    @pytest.mark.asyncio
     async def test_deep_analysis_failure_falls_back_to_local_verdict(self):
         mock_deep = AsyncMock()
         mock_deep.analyze.side_effect = RuntimeError("upstream unavailable")

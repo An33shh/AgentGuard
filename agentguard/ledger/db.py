@@ -293,8 +293,16 @@ class PostgresEventLedger(EventLedger):
         logger.debug("event_persisted", event_id=str(event.event_id), agent_id=event.agent_id)
 
     async def get_event(self, event_id: str) -> Event | None:
+        try:
+            event_uuid = uuid.UUID(event_id)
+        except ValueError:
+            # Not a well-formed UUID -- can't possibly be a real event_id,
+            # so this is a 404, not a 500. A stale dashboard deep link, a
+            # copy-paste error, or a crawler are all realistic ways to hit
+            # this route with a non-UUID path segment.
+            return None
         async with self._sessionmaker() as session:
-            record = await session.get(EventRecord, uuid.UUID(event_id))
+            record = await session.get(EventRecord, event_uuid)
             return self._record_to_event(record) if record else None
 
     async def list_events(

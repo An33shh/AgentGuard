@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agentguard.core.errors import AgentGuardHTTPError, ErrorCode
 from agentguard.core.models import Decision, Event, SessionSummary, TimelineSummary
@@ -93,12 +93,12 @@ async def get_stats(ledger: LedgerDep) -> dict:
 
 class SearchRequest(BaseModel):
     query: str
-    limit: int = 20
+    limit: int = Field(20, ge=1, le=500)
     session_id: str | None = None
     agent_id: str | None = None
     decision: Decision | None = None
-    min_risk: float | None = None
-    max_risk: float | None = None
+    min_risk: float | None = Field(None, ge=0.0, le=1.0)
+    max_risk: float | None = Field(None, ge=0.0, le=1.0)
     since: datetime | None = None
     until: datetime | None = None
 

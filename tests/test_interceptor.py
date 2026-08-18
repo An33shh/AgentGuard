@@ -173,6 +173,13 @@ class TestInterceptor:
         assert event.policy_violation is not None
         assert event.policy_violation.rule_name == "session_limits"
 
+        # Regression: get_session_stats used to only check max_blocked, so a
+        # session locked out via max_actions (this one — max_blocked=100,
+        # never reached) incorrectly reported locked_out=False.
+        stats = inter.get_session_stats(session)
+        assert stats["locked_out"] is True
+        assert stats["locked_out_reason"] == "max_actions"
+
     @pytest.mark.asyncio
     async def test_session_max_blocked_enforced(
         self, policy_engine, event_ledger, mock_analyzer
@@ -205,6 +212,7 @@ class TestInterceptor:
         stats = inter.get_session_stats(session)
         assert stats["blocked"] >= 2
         assert stats["locked_out"] is True
+        assert stats["locked_out_reason"] == "max_blocked"
 
         # ...and reset_session actually lifts it, without needing a restart.
         reset = await inter.reset_session(session)

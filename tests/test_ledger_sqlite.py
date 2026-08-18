@@ -83,6 +83,18 @@ class TestSQLiteBasicOperations:
         assert retrieved.session_id == event.session_id
 
     @pytest.mark.asyncio
+    async def test_get_event_with_malformed_id_returns_none_not_raises(
+        self, sqlite_ledger: PostgresEventLedger
+    ) -> None:
+        """A non-UUID event_id (stale deep link, copy-paste error, crawler)
+        must 404 via the API, not 500 -- get_event has to swallow the
+        uuid.UUID() ValueError itself rather than let it propagate, since
+        the real PostgresEventLedger (used in every production deployment,
+        unlike the test-only InMemoryEventLedger) parses event_id as a UUID
+        before it can even run a query."""
+        assert await sqlite_ledger.get_event("not-a-uuid") is None
+
+    @pytest.mark.asyncio
     async def test_correlation_id_persisted(self, sqlite_ledger: PostgresEventLedger) -> None:
         event = _make_event()
         await sqlite_ledger.append(event)

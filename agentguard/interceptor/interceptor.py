@@ -69,33 +69,6 @@ class ActionNormalizer:
         )
 
     @staticmethod
-    def from_langgraph_message(message: Any) -> Action:
-        """Normalize a LangGraph tool call message into an Action."""
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            tc = message.tool_calls[0]
-            tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
-            parameters = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-        elif hasattr(message, "name"):
-            tool_name = message.name
-            parameters = getattr(message, "args", {}) or {}
-        else:
-            tool_name = "unknown"
-            parameters = {}
-
-        action_type = infer_action_type(tool_name, parameters)
-        if action_type in (ActionType.FILE_READ, ActionType.FILE_WRITE):
-            path = extract_file_path(parameters)
-            if path and is_credential_path(path):
-                action_type = ActionType.CREDENTIAL_ACCESS
-
-        return Action(
-            tool_name=tool_name,
-            type=action_type,
-            parameters=parameters,
-            raw_payload={"message": str(message)},
-        )
-
-    @staticmethod
     def from_dict(payload: dict[str, Any]) -> Action:
         """Normalize a generic dict payload into an Action."""
         tool_name = payload.get("tool_name") or payload.get("name") or payload.get("tool", "unknown")
@@ -242,12 +215,12 @@ class Interceptor:
 
     def get_session_stats(self, session_id: str) -> dict[str, Any]:
         """
-        Inspect a session's action/blocked counters and whether the
-        max_blocked session limit has demoted or locked it out.
+        Inspect a session's action/blocked counters and whether either
+        session_limits lockout condition has locked it out.
 
-        session_limits.max_blocked has no time window or decay — once a
-        session's blocked count reaches it, evaluate_session_limits blocks
-        every subsequent action for that session_id forever, with no
+        Neither max_actions nor max_blocked has a time window or decay —
+        once either is reached, evaluate_session_limits (policy/engine.py)
+        blocks every subsequent action for that session_id forever, with no
         automatic recovery. This (plus reset_session below) is the only way
         to see or clear that state short of restarting the whole process,
         which resets in-memory counters for every session, not just the
@@ -256,13 +229,26 @@ class Interceptor:
         stats = self._session_stats.get(session_id, {"actions": 0, "blocked": 0})
         limits = self._policy.config.session_limits
         demotion = self._policy.config.demotion
+        # A code-review finding: this used to check max_blocked only, but
+        # evaluate_session_limits blocks on EITHER max_actions or
+        # max_blocked — so a session locked out via max_actions reported
+        # locked_out=False here, defeating the point of a diagnostic
+        # endpoint built specifically to explain lockouts.
+        actions_exhausted = bool(limits.max_actions and stats["actions"] >= limits.max_actions)
+        blocked_exhausted = bool(limits.max_blocked and stats["blocked"] >= limits.max_blocked)
+        locked_out_reason: str | None = None
+        if actions_exhausted:
+            locked_out_reason = "max_actions"
+        elif blocked_exhausted:
+            locked_out_reason = "max_blocked"
         return {
             "session_id": session_id,
             "actions": stats["actions"],
             "blocked": stats["blocked"],
             "max_actions": limits.max_actions,
             "max_blocked": limits.max_blocked,
-            "locked_out": bool(limits.max_blocked and stats["blocked"] >= limits.max_blocked),
+            "locked_out": actions_exhausted or blocked_exhausted,
+            "locked_out_reason": locked_out_reason,
             "demoted": bool(
                 demotion.enabled and stats["blocked"] >= demotion.trigger_blocked_count
             ),
