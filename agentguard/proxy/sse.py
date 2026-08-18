@@ -27,6 +27,7 @@ class SSEEvent:
     data: str = ""
     id: str | None = None
     is_comment: bool = False  # a bare ": ..." keep-alive line, not a real event
+    comment: str = ""  # the comment's text, sans leading ":" — only set when is_comment
 
 
 class _SSELineParser:
@@ -39,6 +40,7 @@ class _SSELineParser:
         self._data_lines: list[str] = []
         self._id: str | None = None
         self._is_comment = False
+        self._comment_lines: list[str] = []
         self._has_content = False
 
     def feed_line(self, line: str) -> SSEEvent | None:
@@ -50,11 +52,18 @@ class _SSELineParser:
                 data="\n".join(self._data_lines),
                 id=self._id,
                 is_comment=self._is_comment,
+                comment="\n".join(self._comment_lines),
             )
             self._reset()
             return result
         if line.startswith(":"):
+            # Preserve the comment text, not just the fact that it was one —
+            # encode_sse_event needs it to round-trip a keep-alive without
+            # corrupting it into a malformed empty "data: " line, which
+            # broke any client (e.g. the OpenAI SDK) that json.loads()s
+            # every non-"[DONE]" event it receives.
             self._is_comment = True
+            self._comment_lines.append(line[1:].lstrip(" "))
             self._has_content = True
             return None
         if line.startswith("event:"):
@@ -74,6 +83,7 @@ class _SSELineParser:
         self._data_lines = []
         self._id = None
         self._is_comment = False
+        self._comment_lines = []
         self._has_content = False
 
 
@@ -122,6 +132,14 @@ async def iter_sse_events(response: httpx.Response) -> AsyncIterator[SSEEvent]:
 
 def encode_sse_event(event: SSEEvent) -> bytes:
     """Serialize an SSEEvent back to wire bytes ('event: ...\\ndata: ...\\n\\n')."""
+    if event.is_comment:
+        # A real ": text" comment line, not "data: " — the previous version
+        # dropped the comment text entirely and fell through to the data
+        # branch below, re-encoding a keep-alive as a malformed empty
+        # "data: \n\n" event that crashes any client doing json.loads() on
+        # every non-terminator event it receives.
+        comment_lines = event.comment.split("\n") if event.comment else [""]
+        return ("\n".join(f": {c}" for c in comment_lines) + "\n\n").encode("utf-8")
     lines: list[str] = []
     if event.event is not None:
         lines.append(f"event: {event.event}")

@@ -83,6 +83,13 @@ class TestIterSSEEvents:
         assert len(events) == 1
         assert events[0].is_comment is True
         assert events[0].event is None
+        assert events[0].comment == "keep-alive"
+
+    @pytest.mark.asyncio
+    async def test_bare_comment_with_no_text_round_trips(self) -> None:
+        events = await collect([b":\n\n"])
+        assert events[0].is_comment is True
+        assert events[0].comment == ""
 
     @pytest.mark.asyncio
     async def test_blank_lines_between_events_dont_produce_empty_events(self) -> None:
@@ -137,3 +144,25 @@ class TestEncodeSSEEvent:
         assert parsed[0].event == original.event
         assert parsed[0].data == original.data
         assert parsed[0].id == original.id
+
+    def test_comment_keep_alive_encodes_as_a_real_comment_not_malformed_data(self) -> None:
+        # Regression: this used to fall through to the data-line branch and
+        # produce b'data: \n\n' — a malformed empty JSON-shaped event that
+        # crashes a client (e.g. the OpenAI SDK) doing json.loads() on every
+        # non-"[DONE]" event it receives. Real upstream gateways (OpenRouter,
+        # nginx-fronted proxies) send comment keep-alives mid-stream.
+        event = SSEEvent(is_comment=True, comment="OPENROUTER PROCESSING")
+        encoded = encode_sse_event(event)
+        assert encoded == b": OPENROUTER PROCESSING\n\n"
+        assert b"data:" not in encoded
+
+    @pytest.mark.asyncio
+    async def test_comment_keep_alive_round_trips_through_parse_encode_parse(self) -> None:
+        original_wire = b": OPENROUTER PROCESSING\n\n"
+        parsed = await collect([original_wire])
+        assert len(parsed) == 1
+        re_encoded = encode_sse_event(parsed[0])
+        assert re_encoded == original_wire
+        re_parsed = await collect([re_encoded])
+        assert re_parsed[0].is_comment is True
+        assert re_parsed[0].comment == "OPENROUTER PROCESSING"
