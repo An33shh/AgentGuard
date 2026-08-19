@@ -73,7 +73,7 @@ class TestABAC:
             agent_id=None,  # unregistered — triggers the ABAC block
         )
         assert decision == Decision.BLOCK
-        stats = interceptor.get_session_stats(session_id)
+        stats = await interceptor.get_session_stats(session_id)
         assert stats["actions"] == 1
         assert stats["blocked"] == 1
 

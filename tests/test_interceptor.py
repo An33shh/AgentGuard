@@ -176,7 +176,7 @@ class TestInterceptor:
         # Regression: get_session_stats used to only check max_blocked, so a
         # session locked out via max_actions (this one — max_blocked=100,
         # never reached) incorrectly reported locked_out=False.
-        stats = inter.get_session_stats(session)
+        stats = await inter.get_session_stats(session)
         assert stats["locked_out"] is True
         assert stats["locked_out_reason"] == "max_actions"
 
@@ -209,7 +209,7 @@ class TestInterceptor:
         assert event.policy_violation.rule_name == "session_limits"
 
         # get_session_stats reflects the lockout...
-        stats = inter.get_session_stats(session)
+        stats = await inter.get_session_stats(session)
         assert stats["blocked"] >= 2
         assert stats["locked_out"] is True
         assert stats["locked_out_reason"] == "max_blocked"
@@ -217,7 +217,7 @@ class TestInterceptor:
         # ...and reset_session actually lifts it, without needing a restart.
         reset = await inter.reset_session(session)
         assert reset is True
-        assert inter.get_session_stats(session)["locked_out"] is False
+        assert (await inter.get_session_stats(session))["locked_out"] is False
 
         d, _ = await inter.intercept(
             raw_payload={"tool_name": "file.read", "parameters": {"path": "README.md"}},
@@ -236,7 +236,7 @@ class TestInterceptor:
     async def test_get_session_stats_defaults_for_unknown_session(
         self, interceptor: Interceptor
     ) -> None:
-        stats = interceptor.get_session_stats("never-seen-session")
+        stats = await interceptor.get_session_stats("never-seen-session")
         assert stats["actions"] == 0
         assert stats["blocked"] == 0
         assert stats["locked_out"] is False
