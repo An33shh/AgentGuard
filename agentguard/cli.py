@@ -224,7 +224,7 @@ def main() -> None:
     # start
     start_p = sub.add_parser("start", help="Start the AgentGuard API server")
     start_p.add_argument("--host", default=None, help="Bind host (default: 0.0.0.0)")
-    start_p.add_argument("--port", type=int, default=None, help="Bind port (default: 8000)")
+    start_p.add_argument("--port", type=int, default=None, help="Bind port (default: 8747)")
     start_p.add_argument("--reload", action="store_true", help="Enable auto-reload (dev mode)")
 
     # demo
