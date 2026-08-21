@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from collections import defaultdict
 from typing import Any
 
 import structlog
@@ -28,6 +27,7 @@ from agentguard.interceptor.action_types import (
     infer_action_type,
     is_credential_path,
 )
+from agentguard.interceptor.session_tracker import SessionTracker
 
 logger = structlog.get_logger(__name__)
 
@@ -66,33 +66,6 @@ class ActionNormalizer:
             type=action_type,
             parameters=parameters,
             raw_payload=tool_call,
-        )
-
-    @staticmethod
-    def from_langgraph_message(message: Any) -> Action:
-        """Normalize a LangGraph tool call message into an Action."""
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            tc = message.tool_calls[0]
-            tool_name = tc.get("name", "unknown") if isinstance(tc, dict) else getattr(tc, "name", "unknown")
-            parameters = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-        elif hasattr(message, "name"):
-            tool_name = message.name
-            parameters = getattr(message, "args", {}) or {}
-        else:
-            tool_name = "unknown"
-            parameters = {}
-
-        action_type = infer_action_type(tool_name, parameters)
-        if action_type in (ActionType.FILE_READ, ActionType.FILE_WRITE):
-            path = extract_file_path(parameters)
-            if path and is_credential_path(path):
-                action_type = ActionType.CREDENTIAL_ACCESS
-
-        return Action(
-            tool_name=tool_name,
-            type=action_type,
-            parameters=parameters,
-            raw_payload={"message": str(message)},
         )
 
     @staticmethod
@@ -142,17 +115,23 @@ class Interceptor:
         event_ledger: Any,
         approval_authority: ApprovalAuthority | None = None,
         approval_ttl_seconds: int = 30,
+        session_tracker: SessionTracker | None = None,
     ) -> None:
         self._analyzer = analyzer
         self._policy = policy_engine
         self._ledger = event_ledger
-        # Per-session counters for session_limits enforcement (in-memory)
-        self._session_stats: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"actions": 0, "blocked": 0}
-        )
-        # Per-session action history for multi-step attack detection
-        self._session_history: dict[str, list[dict]] = defaultdict(list)
-        self._stats_lock = asyncio.Lock()
+        # Per-session action/blocked counters + history for session_limits
+        # enforcement and multi-step attack detection. Redis-backed (shared
+        # across replicas) when REDIS_URL is configured, in-memory fallback
+        # otherwise — see session_tracker.py's module docstring for why this
+        # used to be a plain in-memory dict here and what that broke.
+        # A fresh SessionTracker() (not the module-level singleton) by
+        # default: Interceptor itself is already constructed once per
+        # process behind an lru_cache at every real call site, so this is
+        # still exactly one tracker per process in production, while each
+        # test's own Interceptor() still gets fully isolated in-memory
+        # fallback state instead of sharing one global tracker across tests.
+        self._tracker = session_tracker or SessionTracker(history_max=_SESSION_HISTORY_MAX)
         # Paper-2 hardening: per-action signed approval binding (optional, opt-in)
         self._approval_authority = approval_authority
         self._approval_ttl_seconds = approval_ttl_seconds
@@ -240,6 +219,55 @@ class Interceptor:
         approval = self._pending_approvals.get(approval_id)
         return approval.token if approval else None
 
+    async def get_session_stats(self, session_id: str) -> dict[str, Any]:
+        """
+        Inspect a session's action/blocked counters and whether either
+        session_limits lockout condition has locked it out.
+
+        Neither max_actions nor max_blocked has a time window or decay —
+        once either is reached, evaluate_session_limits (policy/engine.py)
+        blocks every subsequent action for that session_id forever, with no
+        automatic recovery. This (plus reset_session below) is the only way
+        to see or clear that state short of restarting the whole process
+        (or, now that this is Redis-backed when configured, short of an
+        explicit reset — a process restart alone no longer clears it).
+        """
+        stats = await self._tracker.get_stats(session_id)
+        limits = self._policy.config.session_limits
+        demotion = self._policy.config.demotion
+        # A code-review finding: this used to check max_blocked only, but
+        # evaluate_session_limits blocks on EITHER max_actions or
+        # max_blocked — so a session locked out via max_actions reported
+        # locked_out=False here, defeating the point of a diagnostic
+        # endpoint built specifically to explain lockouts.
+        actions_exhausted = bool(limits.max_actions and stats["actions"] >= limits.max_actions)
+        blocked_exhausted = bool(limits.max_blocked and stats["blocked"] >= limits.max_blocked)
+        locked_out_reason: str | None = None
+        if actions_exhausted:
+            locked_out_reason = "max_actions"
+        elif blocked_exhausted:
+            locked_out_reason = "max_blocked"
+        return {
+            "session_id": session_id,
+            "actions": stats["actions"],
+            "blocked": stats["blocked"],
+            "max_actions": limits.max_actions,
+            "max_blocked": limits.max_blocked,
+            "locked_out": actions_exhausted or blocked_exhausted,
+            "locked_out_reason": locked_out_reason,
+            "demoted": bool(
+                demotion.enabled and stats["blocked"] >= demotion.trigger_blocked_count
+            ),
+        }
+
+    async def reset_session(self, session_id: str) -> bool:
+        """
+        Clear a session's action/blocked counters and history, lifting a
+        max_blocked lockout or demotion for it. Returns False if the
+        session had no recorded state to reset.
+        """
+        return await self._tracker.reset(session_id)
+
     async def verify_execution(
         self,
         approval_id: str,
@@ -297,31 +325,52 @@ class Interceptor:
         log.info("intercepting_action")
 
         # 2. Session limits (zero-latency, before any other rule)
-        # Atomically read stats, check limits, and pre-increment the action counter
-        # under one lock acquisition to eliminate the TOCTOU window that would
-        # otherwise allow concurrent requests to bypass max_actions / max_blocked.
-        session_decision = session_violation = None
-        async with self._stats_lock:
-            stats = self._session_stats[session_id]
-            current_actions = stats["actions"]
-            current_blocked = stats["blocked"]
-            session_context = list(self._session_history[session_id])
+        # Atomically check limits and reserve the action slot via the
+        # SessionTracker — Redis-backed across replicas when REDIS_URL is
+        # configured, in-memory + asyncio.Lock otherwise. Closes the TOCTOU
+        # window that would otherwise let concurrent requests bypass
+        # max_actions/max_blocked — now across processes too, not just
+        # within one (see session_tracker.py's module docstring for why
+        # that gap mattered: multiple proxy/API replicas used to each
+        # enforce their own independent in-memory counters).
+        limits = self._policy.config.session_limits
+        limited, current_actions, current_blocked = await self._tracker.reserve_action_slot(
+            session_id, limits.max_actions or 0, limits.max_blocked or 0,
+        )
+        session_context = await self._tracker.get_history(session_id)
+        # `limited` is the tracker's own atomic decision and must be
+        # trusted directly, NOT re-derived by calling evaluate_session_limits
+        # again here: when the reservation succeeds, the returned
+        # current_actions is the POST-increment count (the reserve already
+        # bumped it), so re-checking `current_actions >= max_actions`
+        # against that post-increment value would immediately see the just
+        # -crossed threshold and spuriously report BLOCK for a request the
+        # tracker had already correctly allowed. (Caught by
+        # test_session_max_actions_enforced: an off-by-one where the 3rd
+        # of 3 permitted calls, 2->3, got blocked instead of allowed,
+        # because evaluate_session_limits(3, 0) sees 3 >= 3 immediately
+        # after the reservation itself performed that same 2->3 increment.)
+        # evaluate_session_limits is only called to recover the
+        # human-readable PolicyViolation (rule_name/detail) when the
+        # tracker DID block — its pre-check counts are exactly what's
+        # returned in that branch (see reserve_action_slot's docstring),
+        # so it reconstructs the same decision, not a different one.
+        if limited:
             session_decision, session_violation = self._policy.evaluate_session_limits(
                 current_actions, current_blocked
             )
-            if session_decision != Decision.BLOCK:
-                # Reserve the slot — no concurrent coroutine can also pass this
-                # limit check for the same session until the lock is released.
-                stats["actions"] += 1
-            # Compute effective thresholds inside the lock so current_blocked
-            # is consistent with the thresholds used for this request.
-            # Moving this outside the lock would create a TOCTOU window where
-            # a concurrent request increments blocked before we apply demotion.
-            risk_threshold, review_threshold = self._policy.effective_thresholds(current_blocked)
-            is_demoted = (
-                self._policy.config.demotion.enabled
-                and current_blocked >= self._policy.config.demotion.trigger_blocked_count
-            )
+        else:
+            session_decision, session_violation = Decision.ALLOW, None
+        # current_blocked is the same snapshot the tracker's atomic reserve
+        # read the limit check against — using it here (rather than a fresh
+        # read) keeps the demotion/effective-thresholds calculation
+        # consistent with the decision above instead of racing a concurrent
+        # request that's since changed it.
+        risk_threshold, review_threshold = self._policy.effective_thresholds(current_blocked)
+        is_demoted = (
+            self._policy.config.demotion.enabled
+            and current_blocked >= self._policy.config.demotion.trigger_blocked_count
+        )
         if is_demoted:
             log.warning(
                 "session_demoted",
@@ -353,10 +402,12 @@ class Interceptor:
                 framework=framework,
             )
             asyncio.create_task(self._ledger.append(event))
-            async with self._stats_lock:
-                # Session limit hit: still count both action + blocked.
-                self._session_stats[session_id]["actions"] += 1
-                self._session_stats[session_id]["blocked"] += 1
+            # Session limit hit: still count both action + blocked. The
+            # atomic reserve above deliberately didn't increment actions
+            # for a request it's blocking (nothing to reserve), so it's
+            # recorded here instead, after the fact.
+            await self._tracker.increment_actions(session_id)
+            await self._tracker.increment_blocked(session_id)
             log.warning("action_blocked_session_limit", detail=session_violation.detail)
             return Decision.BLOCK, event
 
@@ -385,9 +436,15 @@ class Interceptor:
                 framework=framework,
             )
             asyncio.create_task(self._ledger.append(event))
-            async with self._stats_lock:
-                self._session_stats[session_id]["actions"] += 1
-                self._session_stats[session_id]["blocked"] += 1
+            # actions counter was already incremented atomically in the
+            # session limit check above (step 2) — only blocked needs
+            # bumping here, matching the provenance-block and
+            # end-of-pipeline paths. Incrementing actions again here
+            # double-counted every ABAC block, inflating this session's
+            # actions count 2x per block and triggering
+            # session_limits.max_actions roughly twice as early as
+            # intended.
+            await self._tracker.increment_blocked(session_id)
             log.warning("action_blocked_abac", detail=abac_violation.detail)
             return Decision.BLOCK, event
 
@@ -417,8 +474,7 @@ class Interceptor:
                 framework=framework,
             )
             asyncio.create_task(self._ledger.append(event))
-            async with self._stats_lock:
-                self._session_stats[session_id]["blocked"] += 1
+            await self._tracker.increment_blocked(session_id)
             log.warning("action_blocked_provenance", detail=prov_violation.detail)
             return Decision.BLOCK, event
 
@@ -428,8 +484,14 @@ class Interceptor:
         if decision == Decision.BLOCK and violation is not None:
             # Fast-path: blocked by deterministic rule, skip LLM call
             latency_ms = (time.monotonic() - t_start) * 1000
+            if violation.rule_type == "shell_destructive_pattern":
+                fast_path_score = self._policy.config.shell_command_policy.block_score
+            elif action.type == ActionType.CREDENTIAL_ACCESS:
+                fast_path_score = 0.95
+            else:
+                fast_path_score = 0.80
             assessment = RiskAssessment(
-                risk_score=0.95 if action.type == ActionType.CREDENTIAL_ACCESS else 0.80,
+                risk_score=fast_path_score,
                 reason=f"Policy rule '{violation.rule_name}' triggered: {violation.detail}",
                 indicators=[violation.rule_type],
                 is_goal_aligned=False,
@@ -506,18 +568,14 @@ class Interceptor:
                 asyncio.create_task(self._enrich_direct(event))
 
         # 8. Update session counters and history
-        # actions counter was pre-incremented atomically in the session limit check.
-        async with self._stats_lock:
-            if decision == Decision.BLOCK:
-                self._session_stats[session_id]["blocked"] += 1
-            history = self._session_history[session_id]
-            history.append({
-                "tool_name": action.tool_name,
-                "action_type": action.type.value,
-                "decision": decision.value,
-            })
-            if len(history) > _SESSION_HISTORY_MAX:
-                self._session_history[session_id] = history[-_SESSION_HISTORY_MAX:]
+        # actions counter was already incremented atomically in the session limit check.
+        if decision == Decision.BLOCK:
+            await self._tracker.increment_blocked(session_id)
+        await self._tracker.append_history(session_id, {
+            "tool_name": action.tool_name,
+            "action_type": action.type.value,
+            "decision": decision.value,
+        })
 
         if decision == Decision.BLOCK:
             log.warning("action_blocked", reason=assessment.reason, latency_ms=f"{latency_ms:.1f}ms")

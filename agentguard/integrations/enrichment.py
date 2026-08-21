@@ -30,7 +30,8 @@ _STRIP_VERBS = re.compile(
     r"retrieve|create|generate|build|deploy|configure|manage|process|"
     r"execute|run|perform|help|assist|investigate|check|scan|"
     r"find|search|collect|extract|transform|load|send|post|update|"
-    r"delete|remove|install|initialize|write|read|list|get|show)\s+",
+    r"delete|remove|install|initialize|write|read|list|get|show|export|"
+    r"import|sync|backup|restore|migrate|validate|verify|test)\s+",
     re.IGNORECASE,
 )
 _STRIP_ARTICLES = re.compile(r"^(the|a|an|this|that|these|those|my|our|all)\s+", re.IGNORECASE)
@@ -38,6 +39,13 @@ _STRIP_TRAILING = re.compile(
     r"\s+(and\s+(create|summarize|generate|return|write|send|produce|report)\b.*)$",
     re.IGNORECASE,
 )
+# Words that must never end a truncated display name — a 4-word hard cutoff
+# can otherwise land mid-phrase on a dangling preposition/article/conjunction
+# (e.g. "Project Changelog For The" from "...changelog for the weekly update").
+_TRAILING_STOPWORDS = frozenset({
+    "for", "to", "the", "a", "an", "of", "in", "on", "at", "with",
+    "and", "or", "from", "by", "as", "into", "onto", "via",
+})
 
 
 def _title_word(w: str) -> str:
@@ -65,11 +73,16 @@ def _rule_based_name(goal: str) -> str:
     words = clean.split()
     if len(words) > 4:
         words = words[:4]
+    # A blind word-count cutoff can land on a dangling preposition/article —
+    # trim any such trailing words rather than showing a truncated-looking
+    # fragment like "Project Changelog For The".
+    while words and words[-1].lower() in _TRAILING_STOPWORDS:
+        words = words[:-1]
     result = " ".join(_title_word(w) for w in words)
     return result or goal[:30]
 
 
-TRIAGE_TOOL = {
+TRIAGE_TOOL: dict[str, Any] = {
     "name": "security_triage",
     "description": "Classify a blocked or flagged AI agent action into a structured security insight.",
     "input_schema": {
@@ -157,9 +170,9 @@ class EnrichmentClient:
         model: str | None = None,
         timeout: float | None = None,
     ) -> None:
-        self._api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        self._model = model or os.getenv("AGENTGUARD_ANALYZER_MODEL", "claude-sonnet-4-6")
-        self._timeout = timeout or float(os.getenv("AGENTGUARD_ANALYZER_TIMEOUT", "30.0"))
+        self._api_key: str = api_key or str(os.getenv("ANTHROPIC_API_KEY", ""))
+        self._model: str = model or str(os.getenv("AGENTGUARD_ANALYZER_MODEL", "claude-sonnet-4-6"))
+        self._timeout: float = timeout or float(os.getenv("AGENTGUARD_ANALYZER_TIMEOUT", "30.0"))
         self._enabled = bool(self._api_key)
         # Process-local cache: agent_id → display_name (avoids redundant LLM calls)
         self._name_cache: dict[str, str] = {}
@@ -229,9 +242,11 @@ class EnrichmentClient:
                 messages=[{"role": "user", "content": f"Goal: {goal}"}],
                 timeout=8.0,
             )
-            name = response.content[0].text.strip().strip("\"'").strip()
-            if name:
-                self._name_cache[agent_id] = name
+            block = response.content[0]
+            if isinstance(block, anthropic.types.TextBlock):
+                name = block.text.strip().strip("\"'").strip()
+                if name:
+                    self._name_cache[agent_id] = name
         except Exception as exc:
             # Rule-based name already in cache — this is a best-effort refinement.
             # Log at debug so systematic failures (e.g. API format changes) are visible.
@@ -261,11 +276,13 @@ class EnrichmentClient:
         try:
             import anthropic
             client = anthropic.AsyncAnthropic(api_key=self._api_key)
-            response = await client.messages.create(
+            response = await client.messages.create(  # type: ignore[call-overload]
                 model=self._model,
                 max_tokens=512,
                 system=SYSTEM_PROMPT,
                 tools=[TRIAGE_TOOL],
+                # See the identical, already investigated tool_choice/messages
+                # dict-literal-vs-TypedDict stub friction in anthropic_backend.py.
                 tool_choice={"type": "tool", "name": "security_triage"},
                 messages=[{"role": "user", "content": user_message}],
                 timeout=self._timeout,

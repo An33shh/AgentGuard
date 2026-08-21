@@ -24,7 +24,9 @@ import structlog
 _log = structlog.get_logger(__name__)
 
 try:
-    from agentguard_rs import PolicyMatcher as _RustPolicyMatcher  # type: ignore[import]
+    # agentguard_rs is a compiled extension with no type stubs; ImportError
+    # is caught below for the "not installed" case.
+    from agentguard_rs import PolicyMatcher as _RustPolicyMatcher  # type: ignore
 
     RUST_AVAILABLE = True
     _log.debug("native_matcher_loaded", extension="agentguard_rs")

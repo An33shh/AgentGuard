@@ -42,6 +42,44 @@ class DemotionConfig(BaseModel):
         return self
 
 
+class ShellCommandPolicy(BaseModel):
+    """
+    Deterministic destructive-command pre-screen.
+
+    Replaces blanket deny_tools:[bash]-style bans in the default policy: an
+    operator who genuinely wants "no agent ever runs Bash" can still express
+    that via deny_tools (unchanged, still fully supported — see
+    policies/strict.yaml). This is instead a content-aware fast path that
+    blocks objectively dangerous command patterns (rm -rf, fork bombs, etc.)
+    without blanket-denying the tool, while anything that doesn't match
+    still falls through to the existing LLM-based risk scoring.
+
+    Scans every parameter value on every action, not just SHELL_COMMAND-
+    classified ones — a pentest found ActionType gating a full bypass (any
+    tool/parameter naming outside the classifier's hardcoded lexicon evades
+    it entirely). See agentguard/policy/engine.py's Rule 1.5 comment.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    deny_patterns: list[str] = Field(
+        default_factory=list,
+        description="Regex patterns to block. Empty list uses the built-in defaults in agentguard.analyzer.patterns.",
+    )
+    block_score: float = Field(
+        default=0.90,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "risk_score attached to the synthesized fast-path RiskAssessment "
+            "when this rule fires — mirrors LocalClassifier.INJECTION_SCORE's "
+            "role, not a confidence filter on which patterns block (every "
+            "pattern in deny_patterns/the built-in set always blocks on "
+            "match, regardless of this value)."
+        ),
+    )
+
+
 class RuleAnnotation(BaseModel):
     """
     Optional per-rule MITRE ATLAS / OWASP annotation override in policy YAML.
@@ -70,6 +108,7 @@ class PolicyConfig(BaseModel):
     review_tools: list[str] = Field(default_factory=list)
     allow_tools: list[str] = Field(default_factory=list)
     session_limits: SessionLimits = Field(default_factory=SessionLimits)
+    shell_command_policy: ShellCommandPolicy = Field(default_factory=ShellCommandPolicy)
 
     # ABAC: tools that require a registered agent identity
     deny_unregistered_tools: list[str] = Field(
@@ -106,6 +145,35 @@ class PolicyConfig(BaseModel):
             raise ValueError(
                 f"review_threshold ({self.review_threshold}) must be less than "
                 f"risk_threshold ({self.risk_threshold})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_demotion_actually_tightens(self) -> PolicyConfig:
+        """demotion.demoted_{risk,review}_threshold must be strictly lower
+        than the base risk_threshold/review_threshold they replace once a
+        session accumulates enough blocks — DemotionConfig's own validator
+        only checks its two fields are ordered correctly *relative to each
+        other*, not relative to the base thresholds. Without this, a policy
+        YAML with risk_threshold: 0.75 and demotion.demoted_risk_threshold:
+        0.90 loaded without error, and a session with a demonstrated
+        pattern of hostile behavior would get MORE lenient thresholds
+        instead of stricter ones — silently inverting demotion into
+        promotion. Validated unconditionally (not just when demotion.enabled
+        is currently true) so toggling it on later doesn't activate a
+        landmine that was never checked when the thresholds were written.
+        """
+        if self.demotion.demoted_risk_threshold >= self.risk_threshold:
+            raise ValueError(
+                f"demotion.demoted_risk_threshold ({self.demotion.demoted_risk_threshold}) "
+                f"must be less than risk_threshold ({self.risk_threshold}) — demotion is "
+                "meant to tighten thresholds for sessions with repeated violations, not loosen them"
+            )
+        if self.demotion.demoted_review_threshold >= self.review_threshold:
+            raise ValueError(
+                f"demotion.demoted_review_threshold ({self.demotion.demoted_review_threshold}) "
+                f"must be less than review_threshold ({self.review_threshold}) — demotion is "
+                "meant to tighten thresholds for sessions with repeated violations, not loosen them"
             )
         return self
 

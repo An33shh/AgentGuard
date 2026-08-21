@@ -1,4 +1,5 @@
 import { ProvenanceTag, ProvenanceSourceType } from "@/types";
+import { Panel } from "@/components/ui/Panel";
 
 const SOURCE_TYPE_STYLES: Record<ProvenanceSourceType, { badge: string; label: string }> = {
   user_instruction: { badge: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",       label: "User" },
@@ -16,18 +17,16 @@ export function ProvenancePanel({ tags }: { tags: ProvenanceTag[] }) {
   );
 
   return (
-    <div className="bg-[#0C1220] rounded-xl border border-[#1C2844] p-6">
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xs font-semibold text-[#6E7D91] uppercase tracking-wider">
-          Data Provenance
-        </h2>
-        {hasThreatSource && (
+    <Panel
+      title="Data Provenance"
+      action={
+        hasThreatSource && (
           <span className="text-xs font-medium bg-[#D29922]/10 text-[#D29922] border border-[#D29922]/20 px-2.5 py-1 rounded-full">
             Untrusted Source
           </span>
-        )}
-      </div>
-
+        )
+      }
+    >
       <div className="space-y-3">
         {tags.map((tag, i) => {
           const style = SOURCE_TYPE_STYLES[tag.source_type as ProvenanceSourceType] ?? SOURCE_TYPE_STYLES.system;
@@ -61,6 +60,6 @@ export function ProvenancePanel({ tags }: { tags: ProvenanceTag[] }) {
       <p className="text-xs text-[#3A4A5C] mt-5 pt-4 border-t border-[#1C2844]">
         MITRE ATLAS AML.T0054 — Prompt Injection via Tool Outputs
       </p>
-    </div>
+    </Panel>
   );
 }

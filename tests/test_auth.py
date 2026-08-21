@@ -64,20 +64,20 @@ class TestJwtUtils:
 class TestRateLimiter:
     @pytest.mark.asyncio
     async def test_allows_requests_within_limit(self) -> None:
-        limiter = RateLimiter(requests_per_window=5, window_seconds=60)
+        limiter = RateLimiter(requests_per_window=5, window_seconds=60, redis_url=None)
         for _ in range(5):
             assert await limiter.is_allowed("client-a") is True
 
     @pytest.mark.asyncio
     async def test_blocks_requests_exceeding_limit(self) -> None:
-        limiter = RateLimiter(requests_per_window=3, window_seconds=60)
+        limiter = RateLimiter(requests_per_window=3, window_seconds=60, redis_url=None)
         for _ in range(3):
             await limiter.is_allowed("client-b")
         assert await limiter.is_allowed("client-b") is False
 
     @pytest.mark.asyncio
     async def test_different_clients_have_independent_buckets(self) -> None:
-        limiter = RateLimiter(requests_per_window=2, window_seconds=60)
+        limiter = RateLimiter(requests_per_window=2, window_seconds=60, redis_url=None)
         await limiter.is_allowed("client-x")
         await limiter.is_allowed("client-x")
         assert await limiter.is_allowed("client-x") is False
@@ -86,7 +86,7 @@ class TestRateLimiter:
 
     @pytest.mark.asyncio
     async def test_sliding_window_expires_old_requests(self) -> None:
-        limiter = RateLimiter(requests_per_window=2, window_seconds=0.1)
+        limiter = RateLimiter(requests_per_window=2, window_seconds=0.1, redis_url=None)
         await limiter.is_allowed("client-z")
         await limiter.is_allowed("client-z")
         assert await limiter.is_allowed("client-z") is False
@@ -96,11 +96,30 @@ class TestRateLimiter:
 
     @pytest.mark.asyncio
     async def test_remaining_count_decrements(self) -> None:
-        limiter = RateLimiter(requests_per_window=10, window_seconds=60)
+        limiter = RateLimiter(requests_per_window=10, window_seconds=60, redis_url=None)
         assert limiter.remaining("new-client") == 10
         await limiter.is_allowed("new-client")
         await limiter.is_allowed("new-client")
         assert limiter.remaining("new-client") == 8
+
+    @pytest.mark.asyncio
+    async def test_redis_path_does_not_leak_into_in_memory_buckets(self) -> None:
+        """Regression test: is_allowed() used to mirror every Redis-allowed
+        request into self._buckets[client_id] with no pruning on that path
+        (pruning/eviction only ran in the in-memory fallback branch, which
+        is unreachable while Redis is healthy) — an unbounded memory leak,
+        one deque entry per allowed request forever, for any long-running
+        deployment with REDIS_URL configured (the documented production
+        setup)."""
+        from unittest.mock import AsyncMock
+
+        limiter = RateLimiter(requests_per_window=1000, window_seconds=60)
+        limiter._check_redis = AsyncMock(return_value=True)  # simulate healthy Redis, always-allow
+
+        for _ in range(50):
+            assert await limiter.is_allowed("redis-backed-client") is True
+
+        assert "redis-backed-client" not in limiter._buckets
 
 
 # ---------------------------------------------------------------------------

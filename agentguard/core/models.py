@@ -99,9 +99,15 @@ class RiskAssessment(BaseModel):
     latency_ms: float = 0.0
     attack_taxonomy: AttackTaxonomyAnnotation | None = None
 
-    @field_validator("risk_score")
+    @field_validator("risk_score", mode="before")
     @classmethod
     def clamp_score(cls, v: float) -> float:
+        # mode="before" is required: the default mode="after" runs *after*
+        # Field(ge=0.0, le=1.0) has already rejected any out-of-range value
+        # with a ValidationError, so this never actually ran for the one
+        # case it exists to handle — every out-of-range LLM-returned score
+        # (rounding artifact, hallucination) crashed the analyzer call
+        # instead of being clamped.
         return max(0.0, min(1.0, v))
 
     @property
@@ -185,3 +191,15 @@ class TimelineSummary(BaseModel):
     start_time: datetime | None = None
     end_time: datetime | None = None
     attack_vectors: list[str] = Field(default_factory=list)
+
+
+class SessionSummary(BaseModel):
+    """Lightweight per-session summary for session pickers — cheaper than
+    TimelineSummary (no max/avg risk aggregation), sourced directly from
+    the ledger's already-maintained per-session counters."""
+    session_id: str
+    agent_goal: str
+    framework: str
+    total_events: int
+    blocked_events: int
+    updated_at: datetime

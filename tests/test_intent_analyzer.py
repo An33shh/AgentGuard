@@ -35,7 +35,9 @@ class TestIntentAnalyzerFallback:
             mock_create.side_effect = Exception("Connection refused")
             assessment = await analyzer.analyze(make_action(), "Summarize README.md")
 
-        assert assessment.risk_score == 0.5
+        # Fail-closed for every action type, not just a hardcoded
+        # "sensitive" subset — see IntentAnalyzer._fallback_assessment.
+        assert assessment.risk_score == 1.0
         assert "analyzer_unavailable" in assessment.reason
         assert assessment.analyzer_model == "fallback"
 
@@ -51,7 +53,7 @@ class TestIntentAnalyzerFallback:
             mock_create.return_value = mock_response
             assessment = await analyzer.analyze(make_action(), "Summarize README.md")
 
-        assert assessment.risk_score == 0.5
+        assert assessment.risk_score == 1.0
         assert assessment.analyzer_model == "fallback"
 
     @pytest.mark.asyncio
@@ -106,16 +108,22 @@ class TestIntentAnalyzerSuccess:
 
     @pytest.mark.asyncio
     async def test_risk_score_clamped_to_range(self) -> None:
-        """Risk score validator clamps within [0.0, 1.0] — Pydantic enforces bounds."""
-        import pydantic
+        """Risk score validator clamps within [0.0, 1.0] instead of raising.
 
+        Regression test: clamp_score used to be a default mode="after"
+        field_validator, which runs *after* Field(ge=0.0, le=1.0) has
+        already rejected any out-of-range value with a ValidationError — so
+        clamping never actually ran for the one case it exists to handle.
+        This test previously (incorrectly) asserted that out-of-range
+        scores raise, contradicting its own docstring/name. Now that
+        clamp_score runs with mode="before", it actually clamps."""
         from agentguard.core.models import RiskAssessment
 
-        with pytest.raises(pydantic.ValidationError):
-            RiskAssessment(risk_score=1.5, reason="test", indicators=[])
+        above_range = RiskAssessment(risk_score=1.5, reason="test", indicators=[])
+        assert above_range.risk_score == 1.0
 
-        with pytest.raises(pydantic.ValidationError):
-            RiskAssessment(risk_score=-0.5, reason="test", indicators=[])
+        below_range = RiskAssessment(risk_score=-0.5, reason="test", indicators=[])
+        assert below_range.risk_score == 0.0
 
         valid = RiskAssessment(risk_score=0.75, reason="test", indicators=[])
         assert valid.risk_score == 0.75
@@ -141,7 +149,7 @@ class TestRiskLevels:
 
 
 class TestFailClosedTypes:
-    """Fail-closed: sensitive action types default to risk_score=1.0 on analyzer error."""
+    """Fail-closed: every action type defaults to risk_score=1.0 on analyzer error."""
 
     @pytest.mark.asyncio
     async def test_fail_closed_shell_command(self) -> None:
@@ -172,8 +180,13 @@ class TestFailClosedTypes:
         assert assessment.analyzer_model == "fallback"
 
     @pytest.mark.asyncio
-    async def test_non_sensitive_type_returns_0_5_on_error(self) -> None:
-        """Non-sensitive types (FILE_READ) return 0.5 on error — not fail-closed."""
+    async def test_previously_non_sensitive_type_now_also_fails_closed(self) -> None:
+        """Regression test: FILE_READ (and every other non-"sensitive" type)
+        used to return risk_score=0.5 on analyzer error — below the default
+        review_threshold (0.60), so an outage silently ALLOWed it with no
+        BLOCK and no REVIEW flag. Decision.REVIEW doesn't stop anything
+        either (every adapter only special-cases Decision.BLOCK), so the
+        fix is universal fail-closed, not a higher fallback score."""
         analyzer = make_analyzer()
         action = Action(
             tool_name="file.read",
@@ -183,7 +196,7 @@ class TestFailClosedTypes:
         with patch.object(analyzer._backend._client.messages, "create", new_callable=AsyncMock) as mock:
             mock.side_effect = Exception("timeout")
             assessment = await analyzer.analyze(action, "Summarize README")
-        assert assessment.risk_score == 0.5
+        assert assessment.risk_score == 1.0
         assert assessment.analyzer_model == "fallback"
 
     @pytest.mark.asyncio

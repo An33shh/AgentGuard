@@ -10,7 +10,6 @@ Requires: ANTHROPIC_API_KEY environment variable
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -24,7 +23,6 @@ RESET = "\033[0m"
 RED = "\033[91m"
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
-BLUE = "\033[94m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 
@@ -198,7 +196,6 @@ async def run_demo() -> None:
 
         # Override goal for this scenario
         guard._goal = scenario["goal"]
-        guard._interceptor._analyzer  # ensure analyzer is ready
 
         try:
             decision, event = await guard.intercept(

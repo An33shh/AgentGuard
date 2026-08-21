@@ -10,14 +10,12 @@ Requires: ANTHROPIC_API_KEY + OPENAI_API_KEY
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agentguard.core.secure_agent import SecureAgent
-from agentguard.core.exceptions import BlockedByAgentGuard
 
 
 async def main() -> None:

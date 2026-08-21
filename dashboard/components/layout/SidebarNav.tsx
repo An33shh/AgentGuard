@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useHealthStatus } from "@/lib/useHealthStatus";
 
 const NAV_LINKS = [
   {
@@ -22,6 +23,16 @@ const NAV_LINKS = [
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 12h4l3-9 4 18 3-9h4" />
+      </svg>
+    ),
+  },
+  {
+    href: "/insights",
+    label: "Insights",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2a7 7 0 00-4 12.74V17a1 1 0 001 1h6a1 1 0 001-1v-2.26A7 7 0 0012 2z" />
+        <path d="M9 21h6M10 18v1M14 18v1" />
       </svg>
     ),
   },
@@ -57,8 +68,16 @@ const NAV_LINKS = [
   },
 ];
 
+const HEALTH_LABEL: Record<string, string> = {
+  healthy: "Live",
+  degraded: "Degraded",
+  down: "Offline",
+  checking: "Checking…",
+};
+
 export function SidebarNav() {
   const pathname = usePathname();
+  const health = useHealthStatus();
 
   return (
     <nav
@@ -137,8 +156,11 @@ export function SidebarNav() {
       <div className="px-5 py-4" style={{ borderTop: "1px solid #1C2844" }}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 pulse" style={{ boxShadow: "0 0 4px rgba(63,185,80,0.8)" }} />
-            <p className="text-xs text-[#3A4A5C]">Live</p>
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${health === "healthy" ? "bg-emerald-500 pulse" : health === "down" ? "bg-[#F85149]" : health === "degraded" ? "bg-[#D29922]" : "bg-[#3A4A5C]"}`}
+              style={health === "healthy" ? { boxShadow: "0 0 4px rgba(63,185,80,0.8)" } : undefined}
+            />
+            <p className="text-xs text-[#3A4A5C]">{HEALTH_LABEL[health]}</p>
           </div>
           <p className="text-[10px] text-[#3A4A5C] font-mono">v0.8.0</p>
         </div>

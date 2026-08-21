@@ -40,6 +40,8 @@ def _make_event(
     tool_name: str = "file.read",
     risk_score: float = 0.1,
     is_registered: bool = True,
+    reason: str = "test assessment",
+    indicators: list[str] | None = None,
 ) -> Event:
     return Event(
         event_id=str(uuid.uuid4()),
@@ -57,8 +59,8 @@ def _make_event(
         ),
         assessment=RiskAssessment(
             risk_score=risk_score,
-            reason="test assessment",
-            indicators=[],
+            reason=reason,
+            indicators=indicators if indicators is not None else [],
             is_goal_aligned=True,
             analyzer_model="test",
             latency_ms=5.0,
@@ -79,6 +81,18 @@ class TestSQLiteBasicOperations:
         assert retrieved is not None
         assert retrieved.event_id == event.event_id
         assert retrieved.session_id == event.session_id
+
+    @pytest.mark.asyncio
+    async def test_get_event_with_malformed_id_returns_none_not_raises(
+        self, sqlite_ledger: PostgresEventLedger
+    ) -> None:
+        """A non-UUID event_id (stale deep link, copy-paste error, crawler)
+        must 404 via the API, not 500 -- get_event has to swallow the
+        uuid.UUID() ValueError itself rather than let it propagate, since
+        the real PostgresEventLedger (used in every production deployment,
+        unlike the test-only InMemoryEventLedger) parses event_id as a UUID
+        before it can even run a query."""
+        assert await sqlite_ledger.get_event("not-a-uuid") is None
 
     @pytest.mark.asyncio
     async def test_correlation_id_persisted(self, sqlite_ledger: PostgresEventLedger) -> None:
@@ -110,11 +124,72 @@ class TestSQLiteBasicOperations:
         assert blocked[0].decision == Decision.BLOCK
 
     @pytest.mark.asyncio
+    async def test_list_events_filter_agent_id(self, sqlite_ledger: PostgresEventLedger) -> None:
+        await sqlite_ledger.append(_make_event(agent_id="agent-a"))
+        await sqlite_ledger.append(_make_event(agent_id="agent-a"))
+        await sqlite_ledger.append(_make_event(agent_id="agent-b"))
+        events = await sqlite_ledger.list_events(agent_id="agent-a")
+        assert len(events) == 2
+        assert all(e.agent_id == "agent-a" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_search_events_fulltext_composes_with_filters(
+        self, sqlite_ledger: PostgresEventLedger
+    ) -> None:
+        await sqlite_ledger.append(_make_event(agent_id="agent-a", decision=Decision.BLOCK, reason="suspicious exfil attempt"))
+        await sqlite_ledger.append(_make_event(agent_id="agent-a", decision=Decision.ALLOW, reason="suspicious exfil attempt"))
+        await sqlite_ledger.append(_make_event(agent_id="agent-b", decision=Decision.BLOCK, reason="suspicious exfil attempt"))
+        await sqlite_ledger.append(_make_event(agent_id="agent-a", decision=Decision.BLOCK, reason="unrelated benign action"))
+
+        results = await sqlite_ledger.search_events_fulltext("exfil", decision=Decision.BLOCK, agent_id="agent-a")
+        assert len(results) == 1
+        assert results[0].agent_id == "agent-a"
+        assert results[0].decision == Decision.BLOCK
+
+    @pytest.mark.asyncio
     async def test_list_sessions(self, sqlite_ledger: PostgresEventLedger) -> None:
         await sqlite_ledger.append(_make_event(session_id="sess-a"))
         await sqlite_ledger.append(_make_event(session_id="sess-b"))
         sessions = await sqlite_ledger.list_sessions()
         assert set(sessions) == {"sess-a", "sess-b"}
+
+    @pytest.mark.asyncio
+    async def test_list_session_summaries_attack_first_ordering(
+        self, sqlite_ledger: PostgresEventLedger
+    ) -> None:
+        await sqlite_ledger.append(_make_event(session_id="s1", decision=Decision.ALLOW))
+        await sqlite_ledger.append(_make_event(session_id="s2", decision=Decision.BLOCK))
+        await sqlite_ledger.append(_make_event(session_id="s2", decision=Decision.BLOCK))
+        await sqlite_ledger.append(_make_event(session_id="s2", decision=Decision.ALLOW))
+        await sqlite_ledger.append(_make_event(session_id="s3", decision=Decision.BLOCK))
+        await sqlite_ledger.append(_make_event(session_id="s3", decision=Decision.ALLOW))
+
+        summaries = await sqlite_ledger.list_session_summaries()
+        assert [s.session_id for s in summaries] == ["s2", "s3", "s1"]
+        s2 = next(s for s in summaries if s.session_id == "s2")
+        assert s2.total_events == 3
+        assert s2.blocked_events == 2
+        assert s2.framework == "test"
+
+    @pytest.mark.asyncio
+    async def test_list_session_summaries_framework_frozen_from_first_event(
+        self, sqlite_ledger: PostgresEventLedger
+    ) -> None:
+        """The upsert in append() only sets `framework` on the INSERT
+        branch (on_conflict_do_update's set_ clause never touches it) — a
+        later event with a different framework must not change it. Mirrors
+        InMemoryEventLedger's matching behavior."""
+        first = _make_event(session_id="framework-drift")
+        first.framework = "proxy"
+        await sqlite_ledger.append(first)
+
+        second = _make_event(session_id="framework-drift")
+        second.framework = "claude-code"
+        await sqlite_ledger.append(second)
+
+        summaries = await sqlite_ledger.list_session_summaries()
+        summary = next(s for s in summaries if s.session_id == "framework-drift")
+        assert summary.framework == "proxy"
 
     @pytest.mark.asyncio
     async def test_get_stats(self, sqlite_ledger: PostgresEventLedger) -> None:
@@ -145,6 +220,32 @@ class TestSQLiteAgentProfile:
         assert profile is not None
         assert profile.blocked_events == 1
         assert profile.allowed_events == 1
+
+    @pytest.mark.asyncio
+    async def test_attack_patterns_excludes_non_blocked_indicators(
+        self, sqlite_ledger: PostgresEventLedger
+    ) -> None:
+        """attack_patterns must only reflect indicators from BLOCKed events —
+        matching InMemoryEventLedger.list_agents, which filters to
+        `blocked = [e for e in evts if e.decision == Decision.BLOCK]` before
+        deriving patterns. An indicator the analyzer flagged on an
+        ultimately-ALLOWED or REVIEW action must not leak into an agent's
+        attack-pattern list."""
+        await sqlite_ledger.append(_make_event(
+            agent_id="agent-mixed", decision=Decision.ALLOW,
+            indicators=["benign_flagged_indicator"],
+        ))
+        await sqlite_ledger.append(_make_event(
+            agent_id="agent-mixed", decision=Decision.REVIEW,
+            indicators=["review_only_indicator"],
+        ))
+        await sqlite_ledger.append(_make_event(
+            agent_id="agent-mixed", decision=Decision.BLOCK,
+            indicators=["real_attack_indicator"],
+        ))
+        profile = await sqlite_ledger.get_agent_profile("agent-mixed")
+        assert profile is not None
+        assert profile.attack_patterns == ["real_attack_indicator"]
 
     @pytest.mark.asyncio
     async def test_agent_profile_case_aggregation(self, sqlite_ledger: PostgresEventLedger) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter
 
@@ -10,7 +11,7 @@ from api.dependencies import InterceptorDep
 
 router = APIRouter(prefix="/api/v1/demo", tags=["demo"])
 
-OPENCLAW_SCENARIOS = [
+OPENCLAW_SCENARIOS: list[dict[str, Any]] = [
     {
         "goal": "Summarize the README.md file",
         "payload": {

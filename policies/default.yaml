@@ -3,15 +3,20 @@ policy:
   risk_threshold: 0.75
   review_threshold: 0.60
 
-  deny_tools:
-    - "shell.execute"
-    - "bash.run"
-    - "bash"
-    - "shell"
-    - "subprocess.run"
-    - "exec"
-    - "run_command"
-    - "terminal"
+  deny_tools: []
+
+  # Content-aware destructive-command pre-screen for Bash/shell actions —
+  # replaces the blanket tool-name ban that used to live in deny_tools
+  # above. Empty deny_patterns means "use the built-in DESTRUCTIVE_SHELL
+  # patterns in agentguard.analyzer.patterns" (rm -rf, fork bombs, piping a
+  # remote fetch into a shell, sudo, credential-file reads, etc.). A
+  # non-matching command is NOT auto-allowed — it still goes through normal
+  # LLM-based risk scoring against the agent's stated goal, same as any
+  # other tool call. For a categorical "no agent ever runs Bash" ban
+  # instead, see policies/strict.yaml, which keeps deny_tools for exactly
+  # that purpose.
+  shell_command_policy:
+    enabled: true
 
   deny_path_patterns:
     - "~/.ssh/**" 
@@ -55,7 +60,18 @@ policy:
     - "http_post"
 
   session_limits:
-    max_actions: 100
+    # max_actions is a coarse circuit-breaker against a genuinely runaway
+    # loop, not a per-conversation cap — the LLM API proxy path
+    # (agentguard/proxy/dependencies.py) deliberately derives session_id
+    # from a hash of the auth credential, not a client-supplied header (a
+    # pentest found the header trivially spoofable to reset lockout/rate
+    # limiting), which means a proxied client's session_id is effectively
+    # permanent for the life of that credential, not one conversation. 100
+    # was tuned for the per-conversation case and made every proxied
+    # deployment hard-lock within one normal working session with no
+    # automatic recovery. max_blocked is the meaningful misbehavior signal
+    # here — leave it tight.
+    max_actions: 5000
     max_blocked: 10
 
   # ABAC: in production every agent will be registered with an explicit agent_id.
@@ -89,7 +105,11 @@ policy:
     deny_tools:
       mitre_atlas_ids: ["AML.T0051", "AML.T0043"]
       owasp_categories: ["AA02"]
-      notes: "Shell/execution tools blocked — LLM Prompt Injection and Craft Adversarial Data patterns"
+      notes: "Empty by default — categorical tool bans go here when an operator wants one (see policies/strict.yaml)"
+    shell_command_policy:
+      mitre_atlas_ids: ["AML.T0051", "AML.T0043"]
+      owasp_categories: ["AA02"]
+      notes: "Content-aware destructive shell-command pre-screen — replaces the old blanket bash/shell deny_tools ban"
     credential_access:
       mitre_atlas_ids: ["AML.T0058"]
       owasp_categories: ["AA03", "AA06"]

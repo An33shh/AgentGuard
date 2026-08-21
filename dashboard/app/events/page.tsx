@@ -1,13 +1,25 @@
 import { getEvents } from "@/lib/api";
 import { EventTable } from "@/components/events/EventTable";
+import { parseEventsSearchParams } from "@/lib/urls";
+import { EVENTS_PAGE_SIZE } from "@/lib/constants";
 import type { Event } from "@/types";
 
-export default async function EventsPage() {
+interface Props {
+  searchParams: Promise<Record<string, string | undefined>>;
+}
+
+export default async function EventsPage({ searchParams }: Props) {
+  const sp = await searchParams;
+  const usp = new URLSearchParams(
+    Object.entries(sp).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+  const filters = parseEventsSearchParams(usp);
+
   let events: Event[] = [];
   let apiError = false;
 
   try {
-    events = await getEvents({ limit: 200 });
+    events = await getEvents({ ...filters, limit: EVENTS_PAGE_SIZE, offset: 0 });
   } catch {
     apiError = true;
   }
@@ -27,7 +39,7 @@ export default async function EventsPage() {
         </div>
       )}
 
-      <EventTable initialEvents={events} />
+      <EventTable initialEvents={events} initialFilters={filters} />
     </div>
   );
 }

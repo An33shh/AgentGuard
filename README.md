@@ -13,9 +13,8 @@
 
 *CrowdStrike for AI agents. Not a prompt filter — secures autonomous decisions at runtime.*
 
-[![PyPI](https://img.shields.io/pypi/v/agentguard?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/agentguard)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Tests](https://img.shields.io/badge/Tests-174%20passing-22c55e?style=flat-square&logo=pytest&logoColor=white)](#)
+[![Tests](https://img.shields.io/badge/Tests-586%20passing-22c55e?style=flat-square&logo=pytest&logoColor=white)](#running-tests)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![License](https://img.shields.io/badge/License-MIT-6366f1?style=flat-square)](#license)
 
@@ -23,13 +22,13 @@
 
 ---
 
-Runtime security for AI agents. Intercepts every tool call before it executes — enforces YAML policies, scores intent with an LLM, and logs a forensic timeline.
+Runtime security for AI agents. Intercepts every tool call before it executes — enforces policy, scores intent against the agent's stated goal, and logs a forensic timeline.
 
 ```
 AI Agent → AgentGuard → tool executes (or is blocked)
 ```
 
-Works with any LLM — Claude, GPT-4o, Llama, Mistral, or anything running locally via Ollama or LM Studio. Native adapters for OpenAI Agents SDK, LangGraph, and OpenClaw. 174 tests passing.
+Works with any LLM — Claude, GPT-4o, Llama, Mistral, or anything running locally via Ollama or LM Studio. Native adapters for OpenAI Agents SDK, LangGraph, and OpenClaw. 586 tests passing.
 
 ---
 
@@ -71,20 +70,64 @@ Blocked events are stored with full forensic detail — risk score, reason, poli
 
 ---
 
+## LLM API proxy
+
+For agents you can't (or don't want to) instrument with an adapter, AgentGuard can also run as a
+drop-in reverse proxy in front of the real Anthropic and OpenAI APIs — point your existing SDK's
+base URL at it, keep your real API key, and every tool/function call is intercepted with no
+changes to agent code.
+
+```
+Agent SDK  →  AgentGuard proxy  →  api.anthropic.com / api.openai.com
+```
+
+- Supports both `/v1/messages` (Anthropic) and `/v1/chat/completions` (OpenAI-compatible), streaming and non-streaming.
+- Scans inbound content for prompt injection before it reaches the agent.
+- Buffers only tool-call content from the response — everything else streams through live, so a
+  blocked tool call is replaced with a text explanation instead of executing or silently vanishing.
+- Fails closed: an unhandled proxy error blocks the request rather than passing it through unfiltered.
+- Runs as its own service on its own port, separate from the main API.
+
+```bash
+export AGENTGUARD_PROXY_ANTHROPIC_BASE_URL=https://api.anthropic.com
+export AGENTGUARD_PROXY_OPENAI_BASE_URL=https://api.openai.com
+uvicorn agentguard.proxy.app:app --port 8748
+```
+
+Point your SDK's `base_url` at `http://localhost:8748` and call it exactly as you would the real
+API — your normal API key is forwarded upstream unchanged. Optional headers give AgentGuard
+context it can't infer from the request alone:
+
+```
+X-AgentGuard-Goal:       "Summarize the README file"   # agent's stated goal, scored against each action
+X-AgentGuard-AgentId:    my-registered-agent-id          # explicit identity (skips ABAC's unregistered-caller checks)
+X-AgentGuard-Framework:  langgraph                       # declared framework, used if auto-detection is inconclusive
+```
+
+Not yet published as a container image or `docker-compose` service — run it directly with `uvicorn` as shown above, or behind your own process manager.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/messages` | Anthropic Messages API, streaming and non-streaming |
+| `POST` | `/v1/chat/completions` | OpenAI Chat Completions API, streaming and non-streaming |
+| `GET` | `/admin/sessions/{session_id}` | Session's action/blocked counters and lockout status |
+| `POST` | `/admin/sessions/{session_id}/reset` | Clear a session's counters, lifting a lockout |
+
+`/admin/*` requires the same auth as the main API (`AGENTGUARD_API_KEY` / JWT) when configured.
+
+---
+
 ## Install
 
-### pip (recommended)
+A PyPI package and Homebrew tap are planned but not published yet — for now, install from source:
 
 ```bash
-pip install agentguard
+git clone https://github.com/An33shh/AgentGuard.git
+cd AgentGuard
+pip install -e .
 ```
 
-### Homebrew (macOS / Linux)
-
-```bash
-brew tap An33shh/agentguard
-brew install agentguard
-```
+This installs the `agentguard` CLI on your `PATH`.
 
 ---
 
@@ -102,8 +145,8 @@ This walks you through choosing your LLM provider, entering your API key, and pi
 
 ```bash
 agentguard start
-# API: http://localhost:8000
-# Docs: http://localhost:8000/docs
+# API: http://localhost:8747
+# Docs: http://localhost:8747/docs
 ```
 
 ### 3. Run the attack demo
@@ -126,7 +169,7 @@ Shows liveness + readiness for each component (database, Redis, policy engine, a
 
 ```bash
 cd dashboard && npm install && npm run dev
-# http://localhost:3000
+# http://localhost:3747
 ```
 
 ---
@@ -160,7 +203,7 @@ agentguard status    — check API + component health
 Copy `examples/openclaw_skill.ts` into your OpenClaw workspace skills directory:
 
 ```bash
-export AGENTGUARD_API_URL=http://localhost:8000
+export AGENTGUARD_API_URL=http://localhost:8747
 ```
 
 ```typescript
@@ -219,7 +262,7 @@ result = await secured_graph.ainvoke({"messages": [...]})
 Any runtime can call the intercept endpoint directly — Node.js, Go, or anything else:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/intercept \
+curl -X POST http://localhost:8747/api/v1/intercept \
   -H "Content-Type: application/json" \
   -d '{
     "tool_name": "file.read",
@@ -232,11 +275,11 @@ curl -X POST http://localhost:8000/api/v1/intercept \
 ```json
 {
   "decision": "block",
-  "risk_score": 0.94,
-  "reason": "Credential access inconsistent with stated goal",
+  "risk_score": 0.95,
+  "reason": "Policy rule 'deny_path_patterns' triggered: Path '~/.aws/credentials' matches deny pattern '~/.aws/credentials'",
   "event_id": "...",
-  "mitre_technique": "credential_access",
-  "owasp_category": "sensitive_data_exposure"
+  "mitre_technique": "AML.T0058",
+  "owasp_category": "AA03"
 }
 ```
 
@@ -294,73 +337,62 @@ export AGENTGUARD_ANALYZER_MODEL=your-model
 ### Model quality and the security guarantee
 
 The intent analyzer is the core of AgentGuard's behavioral detection. Its ability to catch
-prompt injection, goal hijacking, and multi-step attack patterns depends entirely on the
-reasoning quality of the configured model.
+prompt injection, goal hijacking, and multi-step attack patterns depends on the reasoning
+quality of the configured model — use a frontier-class reasoning model for the analyzer
+(AgentGuard defaults to `claude-sonnet-4-6`), not a distilled, "mini," or small (<70B) variant.
+A weaker model doesn't just reduce accuracy; it narrows what the analyzer can reliably catch.
 
-**Recommended models** (confirmed reliable for adversarial reasoning):
+AgentGuard emits a `UserWarning` at startup when the configured model falls outside its known-good list, so a weak-model deployment is loud, not silent.
 
-| Provider  | Recommended                          | Avoid                              |
-|-----------|--------------------------------------|------------------------------------|
-| Anthropic | `claude-sonnet-4-6` (**default**)    | claude-haiku-* (too weak)          |
-| OpenAI    | `gpt-4o`, `gpt-4-turbo`             | gpt-3.5-*, gpt-4o-mini             |
-| Groq      | `llama-3.3-70b-versatile`           | llama-3.2-* (< 70B)               |
-| Local     | —                                    | Any quantized or <70B model        |
-
-AgentGuard defaults to `claude-sonnet-4-6` because it provides the best adversarial reasoning
-in its class. Switching to a weaker model does not just reduce accuracy — it creates a blind
-spot that sophisticated attacks will exploit.
-
-**When using a non-recommended model**, AgentGuard emits a `UserWarning` at startup:
-```
-UserWarning: AgentGuard: model 'llama3.1' (ollama) may not provide reliable adversarial
-reasoning for security analysis. Recommended: claude-sonnet-4-6 (Anthropic) or gpt-4o (OpenAI).
-```
-
-The deterministic policy engine (deny_tools, path patterns, domains) is model-independent and
-always fast. Only the LLM-scored `risk_threshold` gate degrades with weaker models.
+The deterministic policy engine (blocked tools, path patterns, domains) is model-independent and
+always fast — it doesn't depend on the LLM at all. Only the LLM-scored `risk_threshold` gate is
+affected by model choice.
 
 ---
 
 ## Policy configuration
 
-Edit `policies/default.yaml`:
+Policy is YAML, loaded from `policies/default.yaml`, hot-reloadable without a restart. It combines
+deterministic rules (tool allow/deny lists, file-path and domain patterns, a content-aware
+destructive-shell-command screen, session limits) with the LLM-scored risk threshold — illustrative
+subset below, see the shipped file for the full rule set and rationale:
 
 ```yaml
 policy:
   name: default
   risk_threshold: 0.75        # risk score at or above this → BLOCK
-  review_threshold: 0.50      # between this and risk_threshold → REVIEW
+  review_threshold: 0.60      # between this and risk_threshold → REVIEW
 
-  deny_tools:                 # always blocked, no LLM call made
-    - shell.execute
-    - bash.run
-    - subprocess.run
+  deny_tools: []               # categorical tool bans by name, if you want one (empty by default)
 
-  deny_path_patterns:         # file path globs, always blocked
+  shell_command_policy:        # content-aware screen for shell/bash actions — inspects the
+    enabled: true               # command itself, not just the tool name
+
+  deny_path_patterns:          # file path globs, always blocked
     - ~/.ssh/**
     - ~/.aws/credentials
     - "**/*.pem"
     - "**/*.key"
 
-  deny_domains:               # outbound HTTP domains, always blocked
+  deny_domains:                # outbound HTTP domains, always blocked
     - "*.ngrok.io"
     - "*.requestbin.com"
     - webhook.site
 
-  review_tools:               # flagged for human review, not auto-blocked
+  review_tools:                # flagged for human review, not auto-blocked
     - email.send
     - git.push
     - file.write
 
   session_limits:
-    max_actions: 100
-    max_blocked: 5            # session gets stricter thresholds after this many blocks
+    max_actions: 5000
+    max_blocked: 10             # session gets stricter thresholds after this many blocks
 ```
 
 Hot-reload without restarting:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/policies/reload
+curl -X POST http://localhost:8747/api/v1/policies/reload
 ```
 
 ---
@@ -371,7 +403,7 @@ No API key required — the test suite mocks the LLM.
 
 ```bash
 pytest tests/ -v
-# 174 passed
+# 586 passed
 ```
 
 ---
@@ -414,7 +446,7 @@ agentguard/
 api/                FastAPI application
 dashboard/          Next.js 15 dashboard
 policies/           default.yaml, strict.yaml
-tests/              174 tests
+tests/              586 tests
 examples/           demo_attack.py, openai_agent_example.py,
                     langgraph_agent_example.py, openclaw_agent_example.py,
                     openclaw_skill.ts

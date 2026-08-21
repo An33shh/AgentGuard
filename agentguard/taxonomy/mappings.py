@@ -72,6 +72,13 @@ RULE_TYPE_TO_TAXONOMY: dict[str, TaxonomyMapping] = {
         atlas_ids=["AML.T0051", "AML.T0043"],
         owasp_categories=[OwaspCategory.AA02],
     ),
+    "shell_destructive_pattern": TaxonomyMapping(
+        # Same threat category as tool_blacklist (deny_tools) — uncontrolled
+        # code execution — this is a content-aware variant of the same
+        # rule, not a new threat category.
+        atlas_ids=["AML.T0051", "AML.T0043"],
+        owasp_categories=[OwaspCategory.AA02],
+    ),
     "tool_allowlist": TaxonomyMapping(
         atlas_ids=["AML.T0051"],
         owasp_categories=[OwaspCategory.AA02],

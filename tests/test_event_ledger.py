@@ -13,9 +13,12 @@ def make_event(
     tool_name: str = "file.read",
     decision: Decision = Decision.ALLOW,
     risk_score: float = 0.1,
+    agent_id: str = "",
+    reason: str = "test",
 ) -> Event:
     return Event(
         session_id=session_id,
+        agent_id=agent_id,
         agent_goal="Test goal",
         action=Action(
             tool_name=tool_name,
@@ -24,7 +27,7 @@ def make_event(
         ),
         assessment=RiskAssessment(
             risk_score=risk_score,
-            reason="test",
+            reason=reason,
             indicators=[],
             analyzer_model="mock",
         ),
@@ -84,6 +87,30 @@ class TestInMemoryEventLedger:
         assert high_risk[0].assessment.risk_score == 0.9
 
     @pytest.mark.asyncio
+    async def test_list_events_filter_by_agent_id(self) -> None:
+        ledger = InMemoryEventLedger()
+        await ledger.append(make_event(agent_id="agent-a"))
+        await ledger.append(make_event(agent_id="agent-a"))
+        await ledger.append(make_event(agent_id="agent-b"))
+
+        events = await ledger.list_events(agent_id="agent-a")
+        assert len(events) == 2
+        assert all(e.agent_id == "agent-a" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_search_events_fulltext_composes_with_filters(self) -> None:
+        ledger = InMemoryEventLedger()
+        await ledger.append(make_event(reason="suspicious exfil attempt", decision=Decision.BLOCK, agent_id="agent-a"))
+        await ledger.append(make_event(reason="suspicious exfil attempt", decision=Decision.ALLOW, agent_id="agent-a"))
+        await ledger.append(make_event(reason="suspicious exfil attempt", decision=Decision.BLOCK, agent_id="agent-b"))
+        await ledger.append(make_event(reason="unrelated benign action", decision=Decision.BLOCK, agent_id="agent-a"))
+
+        results = await ledger.search_events_fulltext("exfil", decision=Decision.BLOCK, agent_id="agent-a")
+        assert len(results) == 1
+        assert results[0].agent_id == "agent-a"
+        assert results[0].decision == Decision.BLOCK
+
+    @pytest.mark.asyncio
     async def test_get_timeline_ordered(self) -> None:
         ledger = InMemoryEventLedger()
         for _ in range(3):
@@ -104,6 +131,46 @@ class TestInMemoryEventLedger:
 
         sessions = await ledger.list_sessions()
         assert set(sessions) == {"s1", "s2"}
+
+    @pytest.mark.asyncio
+    async def test_list_session_summaries_attack_first_ordering(self) -> None:
+        ledger = InMemoryEventLedger()
+        # s1: 1 event, 0 blocked. s2: 3 events, 2 blocked. s3: 2 events, 1 blocked.
+        await ledger.append(make_event(session_id="s1", decision=Decision.ALLOW))
+        await ledger.append(make_event(session_id="s2", decision=Decision.BLOCK))
+        await ledger.append(make_event(session_id="s2", decision=Decision.BLOCK))
+        await ledger.append(make_event(session_id="s2", decision=Decision.ALLOW))
+        await ledger.append(make_event(session_id="s3", decision=Decision.BLOCK))
+        await ledger.append(make_event(session_id="s3", decision=Decision.ALLOW))
+
+        summaries = await ledger.list_session_summaries()
+        assert [s.session_id for s in summaries] == ["s2", "s3", "s1"]
+
+        s2 = next(s for s in summaries if s.session_id == "s2")
+        assert s2.total_events == 3
+        assert s2.blocked_events == 2
+        assert s2.agent_goal == "Test goal"
+        assert s2.framework  # non-empty, from the Event default
+
+    @pytest.mark.asyncio
+    async def test_list_session_summaries_framework_is_first_event_not_latest(self) -> None:
+        """PostgresEventLedger's upsert only sets `framework` on the INSERT
+        branch (frozen from whichever event first created the SessionRecord
+        row) — InMemory must agree, not report the latest event's
+        framework, or the two implementations diverge on this field."""
+        ledger = InMemoryEventLedger()
+
+        def event(framework: str) -> Event:
+            e = make_event(session_id="framework-drift")
+            e.framework = framework
+            return e
+
+        await ledger.append(event("proxy"))
+        await ledger.append(event("claude-code"))
+
+        summaries = await ledger.list_session_summaries()
+        summary = next(s for s in summaries if s.session_id == "framework-drift")
+        assert summary.framework == "proxy"
 
     @pytest.mark.asyncio
     async def test_timeline_summary(self) -> None:

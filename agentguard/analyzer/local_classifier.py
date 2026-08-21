@@ -6,30 +6,15 @@ Returns a RiskAssessment immediately; returns None when ambiguous (→ escalate 
 
 from __future__ import annotations
 
-import re
-
+from agentguard.analyzer.patterns import patterns_for
 from agentguard.core.models import Action, RiskAssessment
+from agentguard.guardrail.models import DetectionCategory
 
-# Unambiguous prompt injection signals in parameter values
-_INJECTION_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(p, re.IGNORECASE)
-    for p in [
-        r"ignore\s+(previous|prior|all|your)\s+instructions?",
-        r"override\s+(your|the|all|previous)\s+(goal|instruction|directive|system)",
-        r"forget\s+(your|all|previous|prior)\s+instructions?",
-        r"you\s+are\s+now\b",
-        r"disregard\s+(all|your|previous|prior)",
-        r"new\s+system\s+prompt",
-        r"act\s+as\s+(if\s+you\s+are|a\s+)",
-        r"\[INST\]|\[\/INST\]|<\|im_start\|>|<\|im_end\|>",
-        r"do\s+not\s+follow\s+(your|the)\s+(guidelines?|instructions?|rules?)",
-        r"bypass\s+(your\s+)?(safety|security|policy|restriction)",
-        r"pretend\s+(you\s+are|to\s+be)",
-        r"roleplay\s+as",
-        r"\bjailbreak\b",
-        r"\bDAN\b",
-    ]
-]
+# Same semantic scope as before this module was consolidated onto the shared
+# pattern registry (agentguard/analyzer/patterns.py) — prompt-injection and
+# jailbreak signals only. See that module's docstring for why this exists
+# instead of a private copy of the pattern list.
+_INJECTION_PATTERNS = patterns_for(DetectionCategory.PROMPT_INJECTION, DetectionCategory.JAILBREAK)
 
 
 def _params_contain_injection(parameters: dict) -> tuple[bool, str]:
@@ -38,8 +23,8 @@ def _params_contain_injection(parameters: dict) -> tuple[bool, str]:
         if not isinstance(val, str):
             continue
         for pattern in _INJECTION_PATTERNS:
-            if pattern.search(val):
-                return True, pattern.pattern
+            if pattern.regex.search(val):
+                return True, pattern.name
     return False, ""
 
 

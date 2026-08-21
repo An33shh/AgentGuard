@@ -1,0 +1,3 @@
+export const DASHBOARD_POLL_INTERVAL_MS = 15_000;
+export const EVENTS_POLL_INTERVAL_MS = 20_000;
+export const EVENTS_PAGE_SIZE = 50;

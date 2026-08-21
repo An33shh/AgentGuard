@@ -88,7 +88,10 @@ async def _check_redis() -> dict:
         import redis.asyncio as aioredis
         t0 = time.monotonic()
         client = aioredis.from_url(redis_url, socket_connect_timeout=1)
-        await asyncio.wait_for(client.ping(), timeout=1.0)
+        # redis-py's stubs declare ping() as `Awaitable[bool] | bool` (a sync/
+        # async overload ambiguity) even though redis.asyncio.Redis.ping() is
+        # always a coroutine at runtime.
+        await asyncio.wait_for(client.ping(), timeout=1.0)  # type: ignore[arg-type]
         await client.aclose()
         latency_ms = (time.monotonic() - t0) * 1000
         return {"status": "healthy", "latency_ms": round(latency_ms, 2)}
@@ -100,8 +103,6 @@ def _check_policy() -> dict:
     try:
         from api.dependencies import get_policy_engine_instance
         engine = get_policy_engine_instance()
-        if engine._config is None:
-            return {"status": "unhealthy", "error": "policy not loaded"}
         return {
             "status": "healthy",
             "name": engine._config.name,

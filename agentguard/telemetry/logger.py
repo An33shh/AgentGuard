@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import MutableMapping
 from contextvars import ContextVar
 from typing import Any
 
@@ -13,8 +14,8 @@ request_id_ctx_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 
 def _inject_request_id(
-    logger: Any, method: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
+    logger: Any, method: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     """Structlog processor that injects the current request_id."""
     event_dict["request_id"] = request_id_ctx_var.get()
     return event_dict
@@ -34,6 +35,7 @@ def configure_logging(log_level: str = "INFO", json_logs: bool = True) -> None:
         structlog.processors.StackInfoRenderer(),
     ]
 
+    renderer: structlog.types.Processor
     if json_logs:
         renderer = structlog.processors.JSONRenderer()
     else:
@@ -63,25 +65,3 @@ def configure_logging(log_level: str = "INFO", json_logs: bool = True) -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(level)
-
-
-def setup_otel(service_name: str = "agentguard", otlp_endpoint: str | None = None) -> None:
-    """Initialize OpenTelemetry SDK with optional OTLP exporter."""
-    try:
-        from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-        resource = Resource.create({"service.name": service_name})
-        provider = TracerProvider(resource=resource)
-
-        if otlp_endpoint:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-
-            exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
-            provider.add_span_processor(BatchSpanProcessor(exporter))
-
-        trace.set_tracer_provider(provider)
-    except ImportError:
-        pass  # OTel is optional

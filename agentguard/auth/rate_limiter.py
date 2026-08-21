@@ -14,6 +14,7 @@ import asyncio
 import os
 import time
 from collections import defaultdict, deque
+from typing import Any
 
 import structlog
 
@@ -68,18 +69,19 @@ class RateLimiter:
         window_seconds: float | None = None,
         redis_url: object = _UNSET,
     ) -> None:
-        self._default_limit = requests_per_window or int(os.getenv("AGENTGUARD_RATE_LIMIT", "120"))
-        self._default_window = window_seconds or float(os.getenv("AGENTGUARD_RATE_LIMIT_WINDOW", "60"))
+        self._default_limit: int = requests_per_window or int(os.getenv("AGENTGUARD_RATE_LIMIT", "120"))
+        self._default_window: float = window_seconds or float(os.getenv("AGENTGUARD_RATE_LIMIT_WINDOW", "60"))
         # In-memory fallback state
         self._buckets: dict[str, deque[float]] = defaultdict(deque)
         self._lock = asyncio.Lock()
         # Redis state: explicit None disables Redis (useful in tests); sentinel reads env
+        self._redis_url: str
         if redis_url is _UNSET:
             self._redis_url = os.getenv("REDIS_URL", "")
         else:
-            self._redis_url = redis_url or ""
-        self._redis_client: object | None = None
-        self._redis_script: object | None = None
+            self._redis_url = str(redis_url) if redis_url else ""
+        self._redis_client: Any | None = None
+        self._redis_script: Any | None = None
 
     async def _get_redis_client(self):
         """Lazy-init the Redis client and register the Lua script."""
@@ -99,6 +101,12 @@ class RateLimiter:
         try:
             await self._get_redis_client()  # initialises self._redis_script as side-effect
             script = self._redis_script
+            if script is None:
+                # _get_redis_client() only (re)initialises when self._redis_client
+                # is None; if a prior call already populated a client but this
+                # attribute is still unset for any reason, fail safe to the
+                # in-memory fallback rather than crash on a non-callable None.
+                return None
             now_ms = int(time.time() * 1000)
             key = f"agentguard:rl:{client_id}"
             result = await script(keys=[key], args=[now_ms, window_ms, limit])
@@ -134,11 +142,14 @@ class RateLimiter:
         # Attempt Redis check first
         redis_result = await self._check_redis(client_id, effective_limit, window_ms)
         if redis_result is not None:
-            # Mirror the decision into the in-memory bucket so remaining() stays accurate
-            if redis_result:
-                now = time.monotonic()
-                async with self._lock:
-                    self._buckets[client_id].append(now)
+            # Deliberately not mirrored into self._buckets: this method used
+            # to do so "so remaining() stays accurate", but remaining() is
+            # never called from production code (only in-memory-fallback
+            # tests exercise it) and the mirrored entries were never pruned
+            # on this path — every allowed request under a healthy Redis
+            # config permanently grew self._buckets[client_id] for the life
+            # of the process. remaining() is only accurate for the
+            # in-memory-fallback path now; see its docstring.
             return redis_result
 
         # In-memory fallback
@@ -160,7 +171,14 @@ class RateLimiter:
             return True
 
     def remaining(self, client_id: str, limit: int | None = None, window: float | None = None) -> int:
-        """Return how many requests remain in the current window (approximate, in-memory only)."""
+        """Return how many requests remain in the current window.
+
+        Only accurate for the in-memory fallback path — is_allowed() no
+        longer mirrors Redis-backed decisions into self._buckets (that
+        mirroring was never pruned and leaked memory unboundedly), so if
+        Redis is configured and healthy, this always reports as if no
+        requests had been made.
+        """
         effective_limit = limit if limit is not None else self._default_limit
         effective_window = window if window is not None else self._default_window
         now = time.monotonic()
@@ -201,7 +219,11 @@ def reset_rate_limiter() -> None:
             client = _sync_redis.from_url(redis_url, socket_connect_timeout=1)
             keys = client.keys("agentguard:rl:*")
             if keys:
-                client.delete(*keys)
+                # redis-py's sync stubs type .keys()'s return as the same broad
+                # ResponseT used for async commands, which mypy can't confirm
+                # is iterable/splattable here even though it always is for the
+                # sync client at runtime.
+                client.delete(*keys)  # type: ignore[misc]
             client.close()
         except Exception:  # noqa: S110 — Redis unavailable, nothing to flush
             pass

@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -84,14 +82,17 @@ interface RiskSparklineChartProps {
   events: Event[];
   riskThreshold?: number;
   reviewThreshold?: number;
+  totalEvents?: number; // true grand total, for the "capped" caption
 }
 
 export function RiskSparklineChart({
   events,
   riskThreshold = 75,
   reviewThreshold = 60,
+  totalEvents,
 }: RiskSparklineChartProps) {
   const data = eventsToChartData(events);
+  const isCapped = totalEvents !== undefined && totalEvents > data.length;
 
   return (
     <div
@@ -106,7 +107,9 @@ export function RiskSparklineChart({
         <div>
           <h3 className="text-sm font-medium text-[#E6EDF3]">Risk Score Timeline</h3>
           <p className="text-xs mt-0.5" style={{ color: "#484F58" }}>
-            {data.length} events monitored
+            {isCapped
+              ? `Last ${data.length} of ${totalEvents!.toLocaleString()} events`
+              : `${data.length} events monitored`}
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs" style={{ color: "#484F58" }}>

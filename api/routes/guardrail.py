@@ -23,7 +23,11 @@ class GuardrailScanRequest(BaseModel):
     agent_id: str | None = None
     mode: GuardrailMode | None = Field(
         None,
-        description="Override server default: observe | enforce",
+        description=(
+            "Override server default: observe | enforce. Can only ESCALATE "
+            "(observe -> enforce), never downgrade an enforce server to "
+            "observe for this call — see scan_prompt()'s docstring."
+        ),
     )
 
 
@@ -56,8 +60,25 @@ async def scan_prompt(body: GuardrailScanRequest, guardrail: GuardrailDep) -> Gu
     - ``redact`` — credentials/PII found; use ``redacted_text`` instead
 
     In ``observe`` mode the verdict is always ``allow`` but detections are logged.
+
+    ``mode`` in the request body may only escalate enforcement
+    (observe -> enforce) for this call, never downgrade it (enforce ->
+    observe). This endpoint has no auth requirement by default (auth is
+    opt-in via AGENTGUARD_API_KEY), so without this guard any caller could
+    silently turn off blocking for its own scan requests against a server
+    an operator configured as enforce.
     """
-    result = await guardrail.scan(body.text, body.context_type, body.mode)
+    requested_mode = body.mode
+    if requested_mode == GuardrailMode.OBSERVE and guardrail.mode == GuardrailMode.ENFORCE:
+        requested_mode = None  # ignore the downgrade attempt; scan() falls back to guardrail.mode
+
+    result = await guardrail.scan(
+        body.text,
+        body.context_type,
+        requested_mode,
+        session_id=body.session_id,
+        agent_id=body.agent_id,
+    )
 
     return GuardrailScanResponse(
         scan_id=result.scan_id,

@@ -107,7 +107,7 @@ class TestBuildBlockedResponse:
     def test_removes_blocked_tool_call(self, handler: OpenAIFormatHandler) -> None:
         tc = ProxyToolCall(id="call_001", name="bash", arguments={"command": "ls"}, raw={})
         blocked = [ProxyInterceptionResult(tool_call=tc, allowed=False, reason="deny_tools")]
-        result = handler.build_blocked_response(TOOL_CALL_RESPONSE, blocked, [])
+        result = handler.build_blocked_response(TOOL_CALL_RESPONSE, blocked)
         message = result["choices"][0]["message"]
         assert not message.get("tool_calls")
         assert "AgentGuard" in message["content"]
@@ -119,20 +119,19 @@ class TestBuildBlockedResponse:
             {"id": "c2", "function": {"name": "read", "arguments": "{}"}},
         ], "content": None}, "finish_reason": "tool_calls"}]}
         tc_blocked = ProxyToolCall(id="c1", name="bash", arguments={}, raw={})
-        tc_allowed = ProxyToolCall(id="c2", name="read", arguments={}, raw={})
         blocked = [ProxyInterceptionResult(tool_call=tc_blocked, allowed=False, reason="deny")]
-        allowed = [ProxyInterceptionResult(tool_call=tc_allowed, allowed=True)]
-        result = handler.build_blocked_response(body, blocked, allowed)
+        result = handler.build_blocked_response(body, blocked)
         remaining = result["choices"][0]["message"].get("tool_calls", [])
         assert len(remaining) == 1
         assert remaining[0]["id"] == "c2"
+        assert result["choices"][0]["finish_reason"] == "tool_calls"
 
     def test_does_not_mutate_original(self, handler: OpenAIFormatHandler) -> None:
         import copy
         original = copy.deepcopy(TOOL_CALL_RESPONSE)
         tc = ProxyToolCall(id="call_001", name="bash", arguments={}, raw={})
         blocked = [ProxyInterceptionResult(tool_call=tc, allowed=False)]
-        handler.build_blocked_response(TOOL_CALL_RESPONSE, blocked, [])
+        handler.build_blocked_response(TOOL_CALL_RESPONSE, blocked)
         # Original unchanged
         assert TOOL_CALL_RESPONSE == original
 

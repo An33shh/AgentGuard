@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from agentguard.core.models import Action
 
@@ -58,7 +59,7 @@ Assess risk relative to goal."""
 
 
 # Forced tool_use schema — Claude must call this instead of responding in text
-ASSESS_RISK_TOOL = {
+ASSESS_RISK_TOOL: dict[str, Any] = {
     "name": "assess_risk",
     "description": "Submit a structured risk assessment for the intercepted agent action.",
     "input_schema": {

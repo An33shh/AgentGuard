@@ -32,7 +32,7 @@ class RedisStreamPublisher:
     """
 
     def __init__(self, redis_url: str | None = None) -> None:
-        self._url = redis_url or os.getenv("REDIS_URL", "")
+        self._url: str = redis_url or str(os.getenv("REDIS_URL", ""))
         self._client: Any = None
         self._enabled = bool(self._url)
 
@@ -74,7 +74,7 @@ class RedisStreamConsumer:
         redis_url: str | None = None,
         consumer_name: str = "enrichment-1",
     ) -> None:
-        self._url = redis_url or os.getenv("REDIS_URL", "")
+        self._url: str = redis_url or str(os.getenv("REDIS_URL", ""))
         self._consumer_name = consumer_name
         self._client: Any = None
 

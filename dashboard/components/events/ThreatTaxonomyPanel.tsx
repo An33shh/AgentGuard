@@ -1,4 +1,5 @@
 import { Event } from "@/types";
+import { Panel } from "@/components/ui/Panel";
 
 const ATLAS_BASE_URL = "https://atlas.mitre.org/techniques/";
 
@@ -44,21 +45,20 @@ export function ThreatTaxonomyPanel({ event }: { event: Event }) {
   const { attack_pattern, confidence } = event.assessment.attack_taxonomy ?? {};
 
   return (
-    <div className="bg-[#0C1220] rounded-xl border border-[#1C2844] p-6">
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-xs font-semibold text-[#6E7D91] uppercase tracking-wider">
-          Threat Intelligence
-        </h2>
-        {attack_pattern && attack_pattern !== "none" && (
+    <Panel
+      title="Threat Intelligence"
+      action={
+        attack_pattern &&
+        attack_pattern !== "none" && (
           <span className="text-xs font-medium bg-[#F85149]/10 text-[#F85149] border border-[#F85149]/20 px-2.5 py-1 rounded-full">
             {attack_pattern.replace(/_/g, " ")}
             {confidence !== undefined && (
               <span className="text-[#F85149]/60 ml-1">· {Math.round(confidence * 100)}%</span>
             )}
           </span>
-        )}
-      </div>
-
+        )
+      }
+    >
       {atlasIds.length > 0 && (
         <div className="mb-5">
           <p className="text-xs font-medium text-[#484F58] uppercase tracking-wider mb-2.5">
@@ -102,6 +102,6 @@ export function ThreatTaxonomyPanel({ event }: { event: Event }) {
       <p className="text-xs text-[#3A4A5C] mt-5 pt-4 border-t border-[#1C2844]">
         MITRE ATLAS · OWASP Agentic AI Top 10 (2025)
       </p>
-    </div>
+    </Panel>
   );
 }

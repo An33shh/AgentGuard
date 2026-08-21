@@ -128,7 +128,8 @@ class TestIntentAnalyzerWithOpenAIBackend:
         mock_client.chat.completions.create = AsyncMock(side_effect=Exception("Connection refused"))
         analyzer = IntentAnalyzer(backend=backend)
         assessment = await analyzer.analyze(make_action(), "Summarize README.md")
-        assert assessment.risk_score == 0.5
+        # Fail-closed for every action type — see IntentAnalyzer._fallback_assessment.
+        assert assessment.risk_score == 1.0
         assert "analyzer_unavailable" in assessment.reason
         assert assessment.analyzer_model == "fallback"
 

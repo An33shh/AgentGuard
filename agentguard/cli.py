@@ -79,8 +79,12 @@ def cmd_start(args: argparse.Namespace) -> None:
         except ImportError:
             pass
 
-    host = getattr(args, "host", None) or os.getenv("API_HOST", "0.0.0.0")
-    port = int(getattr(args, "port", None) or os.getenv("API_PORT", "8747"))
+    # getattr(..., None) or os.getenv(..., default)'s type is widened to
+    # include None by mypy's `or` inference even though os.getenv's literal
+    # default makes None unreachable at runtime — see the identical, already
+    # investigated pattern in agentguard/core/secure_agent.py.
+    host = str(getattr(args, "host", None) or os.getenv("API_HOST", "0.0.0.0"))
+    port = int(getattr(args, "port", None) or os.getenv("API_PORT", "8747"))  # type: ignore[arg-type]
     reload = getattr(args, "reload", False)
 
     print(f"Starting AgentGuard API on http://{host}:{port}")
@@ -220,7 +224,7 @@ def main() -> None:
     # start
     start_p = sub.add_parser("start", help="Start the AgentGuard API server")
     start_p.add_argument("--host", default=None, help="Bind host (default: 0.0.0.0)")
-    start_p.add_argument("--port", type=int, default=None, help="Bind port (default: 8000)")
+    start_p.add_argument("--port", type=int, default=None, help="Bind port (default: 8747)")
     start_p.add_argument("--reload", action="store_true", help="Enable auto-reload (dev mode)")
 
     # demo

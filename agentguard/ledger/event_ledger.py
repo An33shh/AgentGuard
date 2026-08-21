@@ -16,10 +16,42 @@ from agentguard.core.models import (
     AttackTaxonomyAnnotation,
     Decision,
     Event,
+    SessionSummary,
     TimelineSummary,
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _apply_filters(
+    events: list[Event],
+    session_id: str | None = None,
+    agent_id: str | None = None,
+    decision: Decision | None = None,
+    min_risk: float | None = None,
+    max_risk: float | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[Event]:
+    """Shared filter logic for InMemoryEventLedger's list_events and
+    search_events_fulltext, so the two never drift apart."""
+    if session_id:
+        events = [e for e in events if e.session_id == session_id]
+    if agent_id:
+        events = [e for e in events if e.agent_id == agent_id]
+    if decision:
+        events = [e for e in events if e.decision == decision]
+    if min_risk is not None:
+        events = [e for e in events if e.assessment.risk_score >= min_risk]
+    if max_risk is not None:
+        events = [e for e in events if e.assessment.risk_score <= max_risk]
+    if since:
+        since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
+        events = [e for e in events if e.timestamp >= since_aware]
+    if until:
+        until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
+        events = [e for e in events if e.timestamp <= until_aware]
+    return events
 
 
 class EventLedger(abc.ABC):
@@ -37,6 +69,7 @@ class EventLedger(abc.ABC):
     async def list_events(
         self,
         session_id: str | None = None,
+        agent_id: str | None = None,
         decision: Decision | None = None,
         min_risk: float | None = None,
         max_risk: float | None = None,
@@ -54,6 +87,12 @@ class EventLedger(abc.ABC):
     @abc.abstractmethod
     async def list_sessions(self) -> list[str]:
         """List all session IDs."""
+
+    @abc.abstractmethod
+    async def list_session_summaries(self) -> list[SessionSummary]:
+        """List all sessions with summary counters, sorted attack-first
+        (most blocked_events, then most total_events) — same ordering as
+        list_sessions, richer payload."""
 
     @abc.abstractmethod
     async def get_timeline_summary(self, session_id: str) -> TimelineSummary | None:
@@ -88,8 +127,16 @@ class EventLedger(abc.ABC):
         self,
         query: str,
         limit: int = 20,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        decision: Decision | None = None,
+        min_risk: float | None = None,
+        max_risk: float | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[Event]:
-        """Search events by case-insensitive substring match on the reason field."""
+        """Search events by case-insensitive substring match on the reason
+        field, composed with the same optional filters as list_events."""
 
 
 class InMemoryEventLedger(EventLedger):
@@ -118,6 +165,7 @@ class InMemoryEventLedger(EventLedger):
     async def list_events(
         self,
         session_id: str | None = None,
+        agent_id: str | None = None,
         decision: Decision | None = None,
         min_risk: float | None = None,
         max_risk: float | None = None,
@@ -129,20 +177,10 @@ class InMemoryEventLedger(EventLedger):
         async with self._lock:
             events = list(self._events.values())
 
-        if session_id:
-            events = [e for e in events if e.session_id == session_id]
-        if decision:
-            events = [e for e in events if e.decision == decision]
-        if min_risk is not None:
-            events = [e for e in events if e.assessment.risk_score >= min_risk]
-        if max_risk is not None:
-            events = [e for e in events if e.assessment.risk_score <= max_risk]
-        if since:
-            since_aware = since if since.tzinfo else since.replace(tzinfo=UTC)
-            events = [e for e in events if e.timestamp >= since_aware]
-        if until:
-            until_aware = until if until.tzinfo else until.replace(tzinfo=UTC)
-            events = [e for e in events if e.timestamp <= until_aware]
+        events = _apply_filters(
+            events, session_id=session_id, agent_id=agent_id, decision=decision,
+            min_risk=min_risk, max_risk=max_risk, since=since, until=until,
+        )
 
         events.sort(key=lambda e: e.timestamp, reverse=True)
         return events[offset : offset + limit]
@@ -157,6 +195,36 @@ class InMemoryEventLedger(EventLedger):
     async def list_sessions(self) -> list[str]:
         async with self._lock:
             return list(self._sessions.keys())
+
+    async def list_session_summaries(self) -> list[SessionSummary]:
+        async with self._lock:
+            events = list(self._events.values())
+        by_session: dict[str, list[Event]] = defaultdict(list)
+        for e in events:
+            by_session[e.session_id].append(e)
+        summaries = []
+        for session_id, evts in by_session.items():
+            evts_sorted = sorted(evts, key=lambda e: e.timestamp)
+            latest = evts_sorted[-1]
+            summaries.append(SessionSummary(
+                session_id=session_id,
+                agent_goal=evts_sorted[0].agent_goal,
+                # First event's framework, not the latest — matches
+                # PostgresEventLedger's upsert, which only sets `framework`
+                # on the INSERT branch (db.py's on_conflict_do_update's
+                # set_ clause never touches it), so it's frozen from
+                # whichever event created the SessionRecord row.
+                framework=evts_sorted[0].framework,
+                total_events=len(evts),
+                blocked_events=sum(1 for e in evts if e.decision == Decision.BLOCK),
+                updated_at=latest.timestamp,
+            ))
+        # Attack-first ordering, matching PostgresEventLedger.list_sessions —
+        # InMemoryEventLedger.list_sessions() itself stays insertion-order
+        # (untouched, its contract is asserted elsewhere); this new method
+        # is the one that actually needs to agree with Postgres.
+        summaries.sort(key=lambda s: (s.blocked_events, s.total_events), reverse=True)
+        return summaries
 
     async def get_timeline_summary(self, session_id: str) -> TimelineSummary | None:
         events = await self.get_timeline(session_id)
@@ -322,6 +390,13 @@ class InMemoryEventLedger(EventLedger):
         self,
         query: str,
         limit: int = 20,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        decision: Decision | None = None,
+        min_risk: float | None = None,
+        max_risk: float | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[Event]:
         q = query.lower()
         async with self._lock:
@@ -329,5 +404,9 @@ class InMemoryEventLedger(EventLedger):
                 e for e in self._events.values()
                 if q in e.assessment.reason.lower()
             ]
+        results = _apply_filters(
+            results, session_id=session_id, agent_id=agent_id, decision=decision,
+            min_risk=min_risk, max_risk=max_risk, since=since, until=until,
+        )
         results.sort(key=lambda e: e.timestamp, reverse=True)
         return results[:limit]

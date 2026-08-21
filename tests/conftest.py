@@ -17,17 +17,20 @@ from agentguard.policy.schema import PolicyConfig
 @pytest.fixture(autouse=True, scope="session")
 def flush_redis_rate_limit_keys():
     """
-    Clear rate limiter Redis keys before each test session.
+    Clear rate limiter and session tracker Redis keys before each test
+    session.
 
     Prevents cross-run contamination when REDIS_URL is configured and a
-    previous test run left entries within the sliding window.
+    previous test run left entries within the sliding window, or session
+    counters from a previous run's session_id that a new run happens to
+    reuse.
     """
     redis_url = os.getenv("REDIS_URL", "")
     if redis_url:
         try:
             import redis as _redis
             client = _redis.from_url(redis_url, socket_connect_timeout=1)
-            keys = client.keys("agentguard:rl:*")
+            keys = client.keys("agentguard:rl:*") + client.keys("agentguard:session:*")
             if keys:
                 client.delete(*keys)
             client.close()

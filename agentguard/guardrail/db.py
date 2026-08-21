@@ -9,12 +9,12 @@ so a single DB_URL env var covers both ledgers.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import structlog
 from sqlalchemy import (
     JSON,
-    Column,
     DateTime,
     Float,
     Index,
@@ -26,7 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from agentguard.guardrail.ledger import GuardrailLedger
 from agentguard.guardrail.models import (
@@ -60,24 +60,24 @@ class GuardrailBase(DeclarativeBase):
 class GuardrailEventRecord(GuardrailBase):
     __tablename__ = "guardrail_events"
 
-    event_id = Column(String(64), primary_key=True)
-    session_id = Column(String(64), nullable=False, index=True)
-    agent_id = Column(String(128), nullable=False, default="")
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    agent_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
 
     # GuardrailResult fields (flattened for queryability)
-    scan_id = Column(String(64), nullable=False)
-    verdict = Column(String(16), nullable=False, index=True)
-    context_type = Column(String(32), nullable=False)
-    mode = Column(String(16), nullable=False)
-    analyzer_model = Column(String(64), nullable=False, default="local_scanner")
-    latency_ms = Column(Float, nullable=False, default=0.0)
-    detections = Column(_FlexJSON, nullable=False, default=list)
+    scan_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    context_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    analyzer_model: Mapped[str] = mapped_column(String(64), nullable=False, default="local_scanner")
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    detections: Mapped[list[dict[str, Any]]] = mapped_column(_FlexJSON, nullable=False, default=list)
 
     # Never store raw text — only hash and length
-    text_hash = Column(String(64), nullable=False)
-    text_length = Column(Integer, nullable=False, default=0)
+    text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    text_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    created_at = Column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         Index("ix_guardrail_session_verdict", "session_id", "verdict"),

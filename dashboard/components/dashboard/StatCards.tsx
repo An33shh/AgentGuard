@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { Stats } from "@/types";
 
 interface StatCardProps {
@@ -8,9 +9,10 @@ interface StatCardProps {
   subtitle?: string;
   accent?: "red" | "green" | "blue" | "default";
   icon?: React.ReactNode;
+  href?: string;
 }
 
-function StatCard({ title, value, subtitle, accent = "default", icon }: StatCardProps) {
+function StatCard({ title, value, subtitle, accent = "default", icon, href }: StatCardProps) {
   const config = {
     red: {
       value: "text-[#F85149]",
@@ -48,7 +50,7 @@ function StatCard({ title, value, subtitle, accent = "default", icon }: StatCard
 
   const c = config[accent];
 
-  return (
+  const card = (
     <div
       className="rounded-xl p-5 relative overflow-hidden transition-transform duration-150 hover:-translate-y-px"
       style={{
@@ -88,9 +90,11 @@ function StatCard({ title, value, subtitle, accent = "default", icon }: StatCard
       </div>
     </div>
   );
+
+  return href ? <Link href={href}>{card}</Link> : card;
 }
 
-export function StatCards({ stats }: { stats: Stats }) {
+export function StatCards({ stats, blockedHref }: { stats: Stats; blockedHref?: string }) {
   const blockRate = stats.total_events > 0
     ? ((stats.blocked_events / stats.total_events) * 100).toFixed(1) + "%"
     : "0%";
@@ -114,6 +118,7 @@ export function StatCards({ stats }: { stats: Stats }) {
         value={stats.blocked_events.toLocaleString()}
         subtitle={`${blockRate} block rate`}
         accent="red"
+        href={blockedHref}
         icon={
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />

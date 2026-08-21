@@ -58,11 +58,13 @@ class LangGraphAdapter(AgentAdapter):
         agent_goal: str,
         session_id: str,
         guardrail: PromptGuardrail | None = None,
+        agent_id: str | None = None,
     ) -> None:
         self._interceptor = interceptor
         self._agent_goal = agent_goal
         self._session_id = session_id
         self._guardrail = guardrail
+        self._agent_id = agent_id
 
     async def before_tool_call(
         self,
@@ -78,6 +80,7 @@ class LangGraphAdapter(AgentAdapter):
             raw_payload=raw_payload,
             agent_goal=self._agent_goal,
             session_id=self._session_id,
+            agent_id=self._agent_id,
             provenance_tags=[
                 ProvenanceTag(
                     source_type=ProvenanceSourceType.SYSTEM,
@@ -99,7 +102,7 @@ class LangGraphAdapter(AgentAdapter):
         Returns a blocked ToolMessage instead of raising, so the graph
         continues running and the agent can handle the refusal gracefully.
         """
-        name = tool_name or getattr(tool_fn, "name", getattr(tool_fn, "__name__", "unknown"))
+        name: str = tool_name or str(getattr(tool_fn, "name", getattr(tool_fn, "__name__", "unknown")))
         adapter = self
 
         async def guarded_tool(*args: Any, **kwargs: Any) -> Any:

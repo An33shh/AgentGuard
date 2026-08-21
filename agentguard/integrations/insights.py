@@ -25,6 +25,9 @@ class InsightsStore:
     def get(self, event_id: str) -> EnrichmentInsight | None:
         return self._store.get(event_id)
 
+    def __len__(self) -> int:
+        return len(self._store)
+
     def list_recent(self, limit: int = 50) -> list[EnrichmentInsight]:
         items = list(self._store.values())
         return items[-limit:]

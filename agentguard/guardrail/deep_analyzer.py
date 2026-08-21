@@ -6,6 +6,8 @@ but with a completely different system prompt and tool schema focused on text co
 
 from __future__ import annotations
 
+from typing import Any
+
 from agentguard.guardrail.models import (
     ContextType,
     DetectionCategory,
@@ -38,7 +40,7 @@ Verdict guidance:
 - "redact" if only credentials or PII are detected (can be substituted)
 - "allow" if text is benign"""
 
-_SCAN_PROMPT_TOOL: dict = {
+_SCAN_PROMPT_TOOL: dict[str, Any] = {
     "name": "scan_prompt",
     "description": "Submit structured findings from scanning a prompt for security threats.",
     "input_schema": {
@@ -127,11 +129,13 @@ class DeepAnalyzer:
 
         Additional detections from the LLM are merged with local_detections by the caller.
         """
-        response = await self._client.messages.create(
+        response = await self._client.messages.create(  # type: ignore[call-overload]
             model=self._model,
             max_tokens=1024,
             system=_SYSTEM_PROMPT,
             tools=[_SCAN_PROMPT_TOOL],
+            # See the identical, already investigated tool_choice/messages
+            # dict-literal-vs-TypedDict stub friction in anthropic_backend.py.
             tool_choice={"type": "tool", "name": "scan_prompt"},
             messages=[
                 {

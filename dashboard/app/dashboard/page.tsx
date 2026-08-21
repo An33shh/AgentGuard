@@ -2,6 +2,11 @@ import { getEvents, getPolicy, getStats } from "@/lib/api";
 import { StatCards } from "@/components/dashboard/StatCards";
 import { RiskSparklineChart } from "@/components/dashboard/RiskSparklineChart";
 import { RecentBlockedFeed } from "@/components/dashboard/RecentBlockedFeed";
+import { MonitoringBadge } from "@/components/dashboard/MonitoringBadge";
+import { WidgetError } from "@/components/ui/WidgetError";
+import { AutoRefresh } from "@/components/ui/AutoRefresh";
+import { DASHBOARD_POLL_INTERVAL_MS } from "@/lib/constants";
+import { eventsUrl } from "@/lib/urls";
 import type { Event, Stats } from "@/types";
 
 const EMPTY_STATS: Stats = {
@@ -14,31 +19,32 @@ const EMPTY_STATS: Stats = {
 };
 
 export default async function DashboardPage() {
-  let stats = EMPTY_STATS;
-  let events: Event[] = [];
-  let blockedEvents: Event[] = [];
-  let riskThreshold = 75;
-  let reviewThreshold = 60;
-  let apiError = false;
+  const [statsR, eventsR, blockedR, policyR] = await Promise.allSettled([
+    getStats(),
+    getEvents({ limit: 100 }),
+    getEvents({ decision: "block", limit: 8 }),
+    getPolicy(),
+  ]);
 
-  try {
-    const [statsData, eventsData, blockedData, policy] = await Promise.all([
-      getStats(),
-      getEvents({ limit: 100 }),
-      getEvents({ decision: "block", limit: 8 }),
-      getPolicy(),
-    ]);
-    stats = statsData;
-    events = eventsData;
-    blockedEvents = blockedData;
-    riskThreshold = Math.round(policy.risk_threshold * 100);
-    reviewThreshold = Math.round(policy.review_threshold * 100);
-  } catch {
-    apiError = true;
-  }
+  const stats: Stats = statsR.status === "fulfilled" ? statsR.value : EMPTY_STATS;
+  const statsError = statsR.status === "rejected";
+
+  const events: Event[] = eventsR.status === "fulfilled" ? eventsR.value : [];
+  const eventsError = eventsR.status === "rejected";
+
+  const blockedEvents: Event[] = blockedR.status === "fulfilled" ? blockedR.value : [];
+  const blockedError = blockedR.status === "rejected";
+
+  const riskThreshold = policyR.status === "fulfilled" ? Math.round(policyR.value.risk_threshold * 100) : 75;
+  const reviewThreshold = policyR.status === "fulfilled" ? Math.round(policyR.value.review_threshold * 100) : 60;
+
+  // Only a true total outage (every call failed) gets the page-wide banner —
+  // a single widget failing degrades just that widget instead.
+  const totalOutage = statsError && eventsError && blockedError;
 
   return (
     <div className="space-y-6">
+      <AutoRefresh intervalMs={DASHBOARD_POLL_INTERVAL_MS} />
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold text-[#E6EDF3] tracking-tight">Dashboard</h1>
@@ -46,34 +52,37 @@ export default async function DashboardPage() {
             Real-time AI agent security monitoring
           </p>
         </div>
-        <div
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs"
-          style={{ background: "rgba(63,185,80,0.08)", border: "1px solid rgba(63,185,80,0.15)", color: "#3FB950" }}
-        >
-          <span className="w-1.5 h-1.5 rounded-full shrink-0 pulse" style={{ background: "#3FB950", boxShadow: "0 0 4px rgba(63,185,80,0.8)" }} />
-          <span className="font-mono">Monitoring Active</span>
-        </div>
+        <MonitoringBadge />
       </div>
 
-      {apiError && (
+      {totalOutage && (
         <div className="bg-[#E88C30]/8 border border-[#E88C30]/20 rounded-xl p-4 text-sm text-[#E88C30]">
           API unavailable — start the AgentGuard API server with{" "}
           <code className="font-mono bg-[#E88C30]/10 px-1 rounded">uvicorn api.main:app --reload</code>
         </div>
       )}
 
-      <StatCards stats={stats} />
+      {statsError ? (
+        <WidgetError message="Stats unavailable" />
+      ) : (
+        <StatCards stats={stats} blockedHref={eventsUrl({ decision: "block" })} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <RiskSparklineChart
-            events={events}
-            riskThreshold={riskThreshold}
-            reviewThreshold={reviewThreshold}
-          />
+          {eventsError ? (
+            <WidgetError message="Risk timeline unavailable" />
+          ) : (
+            <RiskSparklineChart
+              events={events}
+              riskThreshold={riskThreshold}
+              reviewThreshold={reviewThreshold}
+              totalEvents={stats.total_events}
+            />
+          )}
         </div>
         <div>
-          <RecentBlockedFeed events={blockedEvents} />
+          {blockedError ? <WidgetError message="Recent blocks unavailable" /> : <RecentBlockedFeed events={blockedEvents} />}
         </div>
       </div>
     </div>

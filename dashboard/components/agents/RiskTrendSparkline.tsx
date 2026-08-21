@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import {
   AreaChart,
   Area,
@@ -38,7 +39,7 @@ export function RiskTrendSparkline({ trend }: Props) {
 
   const max = Math.max(...trend);
   const strokeColor = max >= 0.75 ? "#F85149" : max >= 0.5 ? "#D29922" : "#3FB950";
-  const gradientId = `trendGradient-${Math.random().toString(36).slice(2, 6)}`;
+  const gradientId = `trendGradient-${useId()}`;
 
   return (
     <div

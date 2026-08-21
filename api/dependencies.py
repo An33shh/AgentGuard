@@ -136,8 +136,6 @@ def get_interceptor() -> Interceptor:
     )
 
 
-AuthDep = Annotated[dict, Depends(verify_auth)]
-RateLimitDep = Annotated[None, Depends(check_rate_limit)]
 LedgerDep = Annotated[EventLedger, Depends(get_ledger)]
 PolicyDep = Annotated[PolicyEngine, Depends(get_policy_engine)]
 InterceptorDep = Annotated[Interceptor, Depends(get_interceptor)]

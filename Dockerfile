@@ -6,12 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
+COPY pyproject.toml README.md .
 COPY agentguard/ ./agentguard/
 RUN pip install --no-cache-dir ".[all]"
 
 COPY api/ ./api/
 COPY policies/ ./policies/
+COPY alembic.ini .
+COPY alembic/ ./alembic/
 
 ENV PYTHONUNBUFFERED=1
 ENV AGENTGUARD_JSON_LOGS=true

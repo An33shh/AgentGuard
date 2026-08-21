@@ -1,8 +1,37 @@
 // Typed API client for AgentGuard FastAPI backend
 
-import type { AgentGraphData, AgentProfile, Decision, Event, PolicyConfig, Stats, TimelineSummary } from "@/types";
+import type { AgentGraphData, AgentProfile, Decision, Event, Insight, PolicyConfig, SessionSummary, Stats, TimelineSummary } from "@/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Server Components (the async page.tsx files) run inside the dashboard
+// container itself and must reach the API via its Docker service name.
+// "use client" components run in the browser and must use the
+// browser-reachable, NEXT_PUBLIC_-inlined URL instead — the two are not
+// interchangeable in a containerized deployment.
+const API_BASE =
+  typeof window === "undefined"
+    ? process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8747"
+    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8747";
+
+export interface ApiErrorBody {
+  error_code: string;
+  message: string;
+}
+
+// The backend's global exception handler (api/main.py) normalizes EVERY
+// HTTPException — even ones raised with a plain string `detail` — into
+// {error_code, message} JSON, on every route, always. Callers can rely on
+// this shape to distinguish e.g. a real 404 (errorCode === "NOT_FOUND")
+// from an outage, instead of every failure looking the same.
+export class ApiError extends Error {
+  status: number;
+  errorCode: string;
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.message);
+    this.name = "ApiError";
+    this.status = status;
+    this.errorCode = body.error_code;
+  }
+}
 
 async function fetchAPI<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
@@ -16,8 +45,17 @@ async function fetchAPI<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+    let body: ApiErrorBody;
+    try {
+      const parsed = await res.json();
+      body =
+        parsed && typeof parsed === "object" && "error_code" in parsed
+          ? (parsed as ApiErrorBody)
+          : { error_code: "INTERNAL_ERROR", message: typeof parsed === "string" ? parsed : JSON.stringify(parsed) };
+    } catch {
+      body = { error_code: "INTERNAL_ERROR", message: res.statusText || `HTTP ${res.status}` };
+    }
+    throw new ApiError(res.status, body);
   }
   return res.json();
 }
@@ -26,6 +64,7 @@ async function fetchAPI<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface EventsFilter {
   session_id?: string;
+  agent_id?: string;
   decision?: Decision;
   min_risk?: number;
   max_risk?: number;
@@ -38,6 +77,7 @@ export interface EventsFilter {
 export async function getEvents(filter: EventsFilter = {}): Promise<Event[]> {
   const params = new URLSearchParams();
   if (filter.session_id) params.set("session_id", filter.session_id);
+  if (filter.agent_id) params.set("agent_id", filter.agent_id);
   if (filter.decision) params.set("decision", filter.decision);
   if (filter.min_risk !== undefined) params.set("min_risk", String(filter.min_risk));
   if (filter.max_risk !== undefined) params.set("max_risk", String(filter.max_risk));
@@ -56,11 +96,12 @@ export async function getEvent(eventId: string): Promise<Event> {
 
 export async function searchEvents(
   query: string,
+  filter: Omit<EventsFilter, "limit" | "offset"> = {},
   limit = 20
 ): Promise<Event[]> {
   return fetchAPI<Event[]>("/api/v1/events/search", {
     method: "POST",
-    body: JSON.stringify({ query, limit }),
+    body: JSON.stringify({ query, limit, ...filter }),
   });
 }
 
@@ -78,8 +119,8 @@ export async function getTimelineSummary(sessionId: string): Promise<TimelineSum
 
 // ── Sessions ───────────────────────────────────────────
 
-export async function getSessions(): Promise<string[]> {
-  return fetchAPI<string[]>("/api/v1/sessions");
+export async function getSessionSummaries(): Promise<SessionSummary[]> {
+  return fetchAPI<SessionSummary[]>("/api/v1/sessions/summary");
 }
 
 // ── Stats ──────────────────────────────────────────────
@@ -134,6 +175,44 @@ export async function getAgentGraph(agentId: string): Promise<AgentGraphData> {
 
 // ── Health ─────────────────────────────────────────────
 
-export async function getHealth(): Promise<{ status: string }> {
-  return fetchAPI<{ status: string }>("/api/v1/health");
+export interface ReadinessStatus {
+  status: "healthy" | "degraded" | "unhealthy";
+  components: Record<string, { status: string; [key: string]: unknown }>;
+}
+
+// Actually checks DB/Redis/policy/analyzer — the real signal for "is
+// monitoring actually working," unlike a bare liveness check that's
+// "healthy" as long as the API process itself is up. Returns a 503 when
+// unhealthy, which fetchAPI turns into a thrown ApiError; callers should
+// catch and treat that the same as "unhealthy".
+export async function getReadiness(): Promise<ReadinessStatus> {
+  return fetchAPI<ReadinessStatus>("/api/v1/readiness");
+}
+
+// ── Insights ───────────────────────────────────────────
+
+export interface InsightsResponse {
+  insights: Insight[];
+  total: number;
+  enrichment_enabled: boolean;
+}
+
+export async function getInsights(limit = 50): Promise<InsightsResponse> {
+  return fetchAPI<InsightsResponse>(`/api/v1/insights?limit=${limit}`);
+}
+
+// ── Demo ───────────────────────────────────────────────
+
+export interface DemoSeedResult {
+  seeded: number;
+  blocked: number;
+  reviewed: number;
+  allowed: number;
+  attack_session_id: string;
+  baseline_session_id: string;
+  results: unknown[];
+}
+
+export async function seedDemo(): Promise<DemoSeedResult> {
+  return fetchAPI<DemoSeedResult>("/api/v1/demo/seed", { method: "POST" });
 }

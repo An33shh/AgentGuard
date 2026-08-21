@@ -57,6 +57,27 @@ class TestABAC:
         assert event.agent_is_registered is False
 
     @pytest.mark.asyncio
+    async def test_abac_block_increments_actions_exactly_once(self) -> None:
+        """Regression test: the session-limit check (step 2) pre-increments
+        `actions` for every request that isn't itself blocked by session
+        limits, and the ABAC-block path (step 3) once *also* incremented
+        `actions` on top of that — double-counting every ABAC block and
+        inflating the session's actions count 2x per block, triggering
+        session_limits.max_actions roughly twice as early as intended."""
+        interceptor = _make_interceptor(self._config())
+        session_id = "abac-actions-count-session"
+        decision, _ = await interceptor.intercept(
+            raw_payload={"tool_name": "git.push", "parameters": {}},
+            agent_goal="Deploy code",
+            session_id=session_id,
+            agent_id=None,  # unregistered — triggers the ABAC block
+        )
+        assert decision == Decision.BLOCK
+        stats = await interceptor.get_session_stats(session_id)
+        assert stats["actions"] == 1
+        assert stats["blocked"] == 1
+
+    @pytest.mark.asyncio
     async def test_registered_agent_allowed_on_sensitive_tool(self) -> None:
         interceptor = _make_interceptor(self._config())
         decision, event = await interceptor.intercept(
@@ -133,6 +154,51 @@ class TestSessionDemotion:
         risk, review = engine.effective_thresholds(session_blocked=10)
         assert risk == 0.40
         assert review == 0.25
+
+    def test_demoted_thresholds_looser_than_base_rejected(self) -> None:
+        """Regression test: DemotionConfig's own validator only checked
+        demoted_review_threshold < demoted_risk_threshold — the two
+        demoted fields relative to each other — never that either was
+        actually tighter than the base threshold it's meant to replace. A
+        policy with risk_threshold=0.75 and demoted_risk_threshold=0.90
+        used to load without error, silently inverting demotion into
+        promotion for sessions with a demonstrated pattern of hostile
+        behavior."""
+        with pytest.raises(ValueError, match="demoted_risk_threshold"):
+            PolicyConfig(
+                name="inverted-demotion",
+                risk_threshold=0.75,
+                review_threshold=0.60,
+                demotion=DemotionConfig(
+                    enabled=True,
+                    demoted_risk_threshold=0.90,  # looser than risk_threshold — invalid
+                    demoted_review_threshold=0.35,
+                ),
+            )
+
+        with pytest.raises(ValueError, match="demoted_review_threshold"):
+            PolicyConfig(
+                name="inverted-demotion-review",
+                risk_threshold=0.75,
+                review_threshold=0.60,
+                demotion=DemotionConfig(
+                    enabled=True,
+                    demoted_risk_threshold=0.50,
+                    demoted_review_threshold=0.65,  # looser than review_threshold — invalid
+                ),
+            )
+
+    def test_demoted_thresholds_validated_even_when_disabled(self) -> None:
+        """Validated unconditionally, not just when demotion.enabled is
+        true — otherwise toggling it on later activates a landmine that
+        was never checked when the thresholds were originally written."""
+        with pytest.raises(ValueError, match="demoted_risk_threshold"):
+            PolicyConfig(
+                name="inverted-but-disabled",
+                risk_threshold=0.75,
+                review_threshold=0.60,
+                demotion=DemotionConfig(enabled=False, demoted_risk_threshold=0.90),
+            )
 
     def test_demotion_disabled_always_uses_base_thresholds(self) -> None:
         config = PolicyConfig(

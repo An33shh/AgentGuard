@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from agentguard.analyzer.backends.base import AnalyzerBackend
 from agentguard.analyzer.prompts import SYSTEM_PROMPT, build_user_prompt
 from agentguard.core.models import Action, RiskAssessment
 
 # OpenAI function-calling schema (converted from Anthropic input_schema format)
-_TOOL = {
+_TOOL: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "assess_risk",
@@ -89,9 +90,13 @@ class OpenAICompatBackend(AnalyzerBackend):
         agent_goal: str,
         session_context: list[dict] | None = None,
     ) -> RiskAssessment:
-        response = await self._client.chat.completions.create(
+        response = await self._client.chat.completions.create(  # type: ignore[call-overload]
             model=self._model,
             tools=[_TOOL],
+            # Plain dict literals for tool_choice/messages don't structurally
+            # match the SDK's TypedDict overloads without importing its exact
+            # param types — a known stub-strictness friction point, not a
+            # runtime issue (this call path is exercised in production).
             tool_choice={"type": "function", "function": {"name": "assess_risk"}},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
