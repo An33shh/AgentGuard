@@ -177,7 +177,14 @@ async def run_demo() -> None:
         goal="OpenClaw Attack Simulation",
         agent_id="openclaw-demo-agent",   # single identity across all scenarios
         framework="demo",
-        policy_path="policies/default.yaml",
+        # No explicit policy_path: from_env()'s own fallback (CWD-relative
+        # policies/default.yaml if present, else the bundled copy shipped
+        # inside the agentguard package) resolves correctly whether this
+        # runs from the repo root (`python examples/demo_attack.py`) or via
+        # `agentguard demo` from an arbitrary pip-installed user's directory
+        # with no policies/ folder anywhere nearby. A hardcoded relative
+        # path here bypassed that fallback and crashed the latter case with
+        # FileNotFoundError: 'policies/default.yaml'.
         session_id="openclaw-demo-2026",
     )
 

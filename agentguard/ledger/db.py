@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -225,6 +226,20 @@ class PostgresEventLedger(EventLedger):
         self._sessionmaker = async_sessionmaker(
             self._engine, class_=AsyncSession, expire_on_commit=False
         )
+        # SQLite only (see create_tables' own docstring) — Postgres tables
+        # come from real Alembic migrations (verified against a live
+        # Postgres instance by CI's test-migrations job) and must not be
+        # silently auto-created here, which would mask exactly the
+        # migration-drift class of bug that job exists to catch.
+        self._sqlite_tables_ready = False
+        # append() is called fire-and-forget (asyncio.create_task, see
+        # Interceptor) — several concurrent first-ever calls all read
+        # _sqlite_tables_ready as False before any of them finishes setting
+        # it True, so without this lock multiple concurrent create_all()
+        # calls raced and crashed with "table sessions already exists".
+        # Caught by actually running `agentguard demo` end-to-end against a
+        # fresh SQLite file, not by reasoning about the fix in isolation.
+        self._sqlite_tables_lock = asyncio.Lock()
 
     async def create_tables(self) -> None:
         """Create all tables if they don't exist. Used for SQLite local dev."""
@@ -235,6 +250,24 @@ class PostgresEventLedger(EventLedger):
         await self._engine.dispose()
 
     async def append(self, event: Event) -> None:
+        # SecureAgent.from_env() (used by `agentguard demo` and any
+        # programmatic caller) constructs a SQLite-backed ledger directly,
+        # with no equivalent of api/main.py's startup lifespan to create
+        # tables first — the first real write used to crash with
+        # "no such table: events" on a fresh agentguard.db. append() is
+        # always the first operation on a freshly-constructed ledger in
+        # every real code path (nothing reads before the first action is
+        # recorded), so lazily creating tables here — once, SQLite only —
+        # covers it without adding a table-readiness check to every method.
+        # Double-checked under the lock: the outer check avoids acquiring
+        # it on every call once tables are ready; the inner one avoids a
+        # second concurrent create_all() for a caller that was already
+        # waiting on the lock when the first call finished.
+        if self._is_sqlite and not self._sqlite_tables_ready:
+            async with self._sqlite_tables_lock:
+                if not self._sqlite_tables_ready:
+                    await self.create_tables()
+                    self._sqlite_tables_ready = True
         record = EventRecord(
             event_id=uuid.UUID(event.event_id),
             session_id=event.session_id,

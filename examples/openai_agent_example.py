@@ -24,7 +24,10 @@ async def main() -> None:
     guard = SecureAgent.from_env(
         goal="Summarize the README.md file and answer questions about it",
         framework="openai",
-        policy_path="policies/default.yaml",
+        # No explicit policy_path — from_env()'s own fallback (CWD-relative
+        # policies/default.yaml if present, else the bundled copy shipped
+        # inside the agentguard package) resolves correctly whether this
+        # runs from the repo root or a pip-installed user's own directory.
         session_id="openai-demo-001",
     )
 
