@@ -151,6 +151,27 @@ PATTERNS: list[Pattern] = [
         r"(?:\.ssh\b|\.aws\b|/etc/(?:passwd|shadow|sudoers)\b|\.netrc\b|credentials\.json\b)",
         DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.88,
     ),
+    # Package-runner tools (npx/pnpm dlx/yarn dlx/bunx/npm exec) fetching and
+    # executing code from a git repo or bare URL instead of the npm
+    # registry — bypasses whatever minimal provenance a registry package
+    # name carries, and is a real, common way an agent gets talked into
+    # running unreviewed code ("just run npx github:some/repo to fix
+    # this"). Deliberately scoped to an explicit git/URL protocol prefix
+    # (github:, git+http(s)://, git://, http(s)://) rather than flagging
+    # every unpinned package-runner invocation the way a first draft of
+    # this pattern might: "npx <package>" with no version pin is the
+    # single most common, entirely benign way these tools are used
+    # (npx create-react-app, npx prettier, npx @angular/cli) — a blanket
+    # "no pin" rule would be a worse false-positive generator than
+    # sudo_elevation, which is exactly why that one was excluded from the
+    # hard-block sweep above. This only fires on the unambiguous case: the
+    # target isn't a registry package name at all.
+    _p(
+        "package_runner_git_or_url_source",
+        r"\b(?:npx|npm\s+exec|pnpm\s+dlx|yarn\s+dlx|bunx)\b\s+(?:--yes\s+|-y\s+)?"
+        r"(?:github:|git\+https?://|git\+ssh://|git://|https?://)\S+",
+        DetectionCategory.DESTRUCTIVE_SHELL, confidence=0.85,
+    ),
 ]
 
 
